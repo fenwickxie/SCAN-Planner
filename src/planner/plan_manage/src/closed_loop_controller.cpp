@@ -17,6 +17,8 @@ namespace
 {
 using scan_planner::UniformBspline;
 
+// 控制器是轻量的轨迹跟踪层，不承担避障。所有状态保存在匿名命名空间，
+// 由单线程 ros::spin() 串行更新，因此回调之间不需要额外互斥锁。
 constexpr double kMaxVYawLimit = 1.0;
 
 ros::Publisher cmd_vel_pub;
@@ -100,6 +102,7 @@ Eigen::Vector2d clampNorm(const Eigen::Vector2d &value, double max_norm)
 
 double estimateDesiredYaw(double t_cur, const Eigen::Vector3d &pos_des)
 {
+  // 用前视点而非瞬时速度定航向，可过滤样条导数在低速和终点附近的抖动。
   const double t_look = std::min(traj_duration, t_cur + time_forward);
   Eigen::Vector3d dir = traj[0].evaluateDeBoorT(t_look) - pos_des;
 
@@ -131,6 +134,8 @@ void publishExecutionFrozen(bool frozen)
 
 void bsplineCallback(const scan_planner::BsplineConstPtr &msg)
 {
+  // 消息携带完整控制点与节点向量；本地重建位置样条并解析求导，保证
+  // 控制器和规划器对速度/加速度的定义完全一致。
   Eigen::MatrixXd pos_pts(3, msg->pos_pts.size());
   Eigen::VectorXd knots(msg->knots.size());
 
@@ -192,6 +197,8 @@ void cmdCallback(const ros::TimerEvent &)
   const double yaw_err = normalizeAngle(yaw_des - odom_yaw);
   const double vyaw_cmd = clamp(kp_yaw * yaw_err, -max_vyaw, max_vyaw);
 
+  // 航向误差过大时只旋转不平移，并通知 FSM 冻结轨迹时钟；否则机器人
+  // 原地转向期间期望点会继续前进，恢复平移时会产生很大的位置跳变。
   if (std::abs(yaw_err) > heading_error_threshold)
   {
     publishExecutionFrozen(true);
@@ -209,6 +216,7 @@ void cmdCallback(const ros::TimerEvent &)
 
   Eigen::Vector2d pos_err(pos_des(0) - odom_pos(0), pos_des(1) - odom_pos(1));
   Eigen::Vector2d vel_ff(vel_des(0), vel_des(1));
+  // 世界系指令 = 样条速度前馈 + 位置误差比例反馈，再旋转到机体系。
   Eigen::Vector2d vel_world = clampNorm(vel_ff + kp_pos * pos_err, std::max(max_vx, max_vy));
 
   const double c = std::cos(odom_yaw);

@@ -7,12 +7,18 @@
 
 using namespace std;
 
+/**
+ * 带 Barzilai-Borwein 步长和 Armijo 回溯的轻量梯度下降器。
+ * 目标函数通过 force_return 请求有序提前退出；当前主 B 样条路径使用 LBFGS，
+ * 此类作为备用优化实现保留。
+ */
 class GradientDescentOptimizer
 {
 
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 
+  // 回调返回目标值并写入同维梯度；data 用于传递调用方上下文。
   typedef double (*objfunDef)(const Eigen::VectorXd &x, Eigen::VectorXd &grad, bool &force_return, void *data);
   enum RESULT
   {

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""交互式记录 Odometry 位置，并生成 navi_mode=2 可直接加载的 YAML。"""
+
 import argparse
 import math
 import os
@@ -22,6 +24,7 @@ DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keypo
 
 
 def strip_ros_args(argv):
+    """去掉 roslaunch/remap 注入的参数，仅把普通参数交给 argparse。"""
     return [arg for arg in argv if ":=" not in arg and not arg.startswith("__")]
 
 
@@ -31,6 +34,7 @@ def format_float(value):
 
 
 def atomic_write(path, content):
+    """先写同目录临时文件再原子替换，避免中断时留下半份 YAML。"""
     directory = os.path.dirname(path)
     if directory and not os.path.isdir(directory):
         os.makedirs(directory)
@@ -42,6 +46,7 @@ def atomic_write(path, content):
 
 
 class KeypointRecorder:
+    """缓存最新里程计，并在终端按键事件到达时编辑内存中的关键点序列。"""
     def __init__(self, args):
         self.odom_topic = args.odom
         self.output_path = DEFAULT_OUTPUT
@@ -54,6 +59,7 @@ class KeypointRecorder:
         self.latest_odom = msg
 
     def current_point(self):
+        """返回有限的 xyz；拒绝 NaN/Inf，避免无效坐标污染导航配置。"""
         if self.latest_odom is None:
             return None
 
@@ -133,6 +139,7 @@ class KeypointRecorder:
             rospy.loginfo("  %02d: [%.3f, %.3f, %.3f]", index, point[0], point[1], point[2])
 
     def build_yaml(self):
+        """按 FSM 读取的扁平参数命名生成确定性 YAML。"""
         lines = ["fsm:", "  waypoint_num: {}".format(len(self.waypoints))]
         for index, point in enumerate(self.waypoints):
             lines.append("  waypoint{}_x: {}".format(index, format_float(point[0])))
@@ -162,6 +169,7 @@ class KeypointRecorder:
         print("")
 
     def prompt_index(self, old_settings, action):
+        """临时恢复终端规范模式读取整行编号，完成后回到单键模式。"""
         if not self.waypoints:
             rospy.logwarn("No waypoint to %s.", action)
             return None
@@ -187,6 +195,8 @@ class KeypointRecorder:
             rospy.logerr("stdin is not a TTY; keyboard control is required.")
             return
 
+        # cbreak 让按键无需 Enter 即可送达；finally 必须恢复终端属性，否则
+        # 脚本异常退出后用户的 shell 会继续处于逐字符模式。
         old_settings = termios.tcgetattr(sys.stdin)
         tty.setcbreak(sys.stdin.fileno())
         rate = rospy.Rate(20)

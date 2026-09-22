@@ -16,6 +16,11 @@ double clamp(double value, double low, double high) {
   return std::max(low, std::min(value, high));
 }
 
+/**
+ * 根据机体水平速度生成简化的对角小跑关节动画。
+ * 该节点只服务 robot_state_publisher/RViz，不计算足端落点、IK 或力控制，
+ * 因而其关节状态不能作为真实机器人控制命令。
+ */
 class Go2GaitPublisher {
  public:
   Go2GaitPublisher() : nh_(), pnh_("~") {
@@ -65,6 +70,7 @@ class Go2GaitPublisher {
       }
     }
 
+    // 某些里程计不填 twist，因此低于阈值时用相邻位置差估计速度作为后备。
     horizontal_speed_ = twist_speed > min_walk_speed_ ? twist_speed : pose_speed;
     last_odom_x_ = x;
     last_odom_y_ = y;
@@ -92,6 +98,7 @@ class Go2GaitPublisher {
     }
 
     const double phase = 2.0 * kPi * gait_frequency_ * stamp.toSec();
+    // FL/RR 同相，FR/RL 相差 pi，形成四足机器人的对角小跑视觉效果。
     fillLeg(0, phase, speed_ratio, true);
     fillLeg(3, phase + kPi, speed_ratio, false);
     fillLeg(6, phase + kPi, speed_ratio, true);
@@ -120,6 +127,7 @@ class Go2GaitPublisher {
   void fillLeg(size_t offset, double phase, double speed_ratio, bool left_side) {
     const double s = std::sin(phase);
     const double c = std::cos(phase);
+    // 正半周抬腿，负半周保持支撑并轻微伸腿；幅度随移动速度线性缩放。
     const double swing = std::max(0.0, s);
     const double side = left_side ? 1.0 : -1.0;
 

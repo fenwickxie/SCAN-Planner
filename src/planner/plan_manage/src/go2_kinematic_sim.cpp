@@ -11,6 +11,8 @@
 
 namespace
 {
+// 仅模拟平面刚体运动学：输入是机体系 vx/vy/wz，输出世界系 Odometry。
+// 不包含足端接触、惯性、打滑或碰撞，不能替代动力学仿真。
 constexpr double kMaxVYawLimit = 1.0;
 
 ros::Publisher odom_pub;
@@ -116,6 +118,7 @@ void simCallback(const ros::TimerEvent &)
   double vx = vx_cmd;
   double vy = vy_cmd;
   double wz = vyaw_cmd;
+  // 看门狗：控制器停止发布后清零速度，避免保留上一条命令导致机器人漂移。
   if ((now - last_cmd_time).toSec() > cmd_timeout)
   {
     vx = 0.0;
@@ -123,6 +126,7 @@ void simCallback(const ros::TimerEvent &)
     wz = 0.0;
   }
 
+  // 将机体系平移速度按当前 yaw 旋转到 world，再用显式 Euler 积分更新位姿。
   const double c = std::cos(yaw);
   const double s = std::sin(yaw);
   vx_world = c * vx - s * vy;

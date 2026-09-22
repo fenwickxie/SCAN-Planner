@@ -46,8 +46,7 @@ struct matrix_hash : std::unary_function<T, size_t> {
   }
 };
 
-// constant parameters
-
+/** 地图生命周期内不频繁变化的配置及其预计算量。 */
 struct MappingParameters {
 
   /* map properties */
@@ -95,11 +94,11 @@ struct MappingParameters {
   double unknown_flag_;
 };
 
-// intermediate mapping data for fusion
-
+/** 传感器回调、射线融合和可视化之间共享的运行时数据。 */
 struct MappingData {
   // main map data, occupancy of each voxel and Euclidean distance
 
+  // 原始 log-odds 占用值；膨胀标志和引用计数分离保存，便于增量撤销障碍。
   std::vector<double> occupancy_buffer_;
   std::vector<char> occupancy_buffer_inflate_;
   std::vector<int> occupancy_buffer_inflate_cnt_;
@@ -129,7 +128,9 @@ struct MappingData {
 
   // flag buffers for speeding up raycasting
 
+  // 一帧内先累计 hit/miss，再统一更新 log-odds，避免点云顺序影响结果。
   vector<short> count_hit_, count_hit_and_miss_;
+  // 帧编号标记用于跳过同一射线/端点的重复体素，不必每帧清空整张标记表。
   vector<char> flag_traverse_, flag_rayend_;
   char raycast_num_;
   queue<Eigen::Vector3i> cache_voxel_;
@@ -146,6 +147,11 @@ struct MappingData {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
+/**
+ * 机器人中心局部三维概率占用地图。
+ * 世界栅格索引通过取模映射到固定数组；窗口滑动时只清除移出区域，
+ * 从而在地图移动时保持 O(切片体素数) 而不是 O(全部体素数) 的更新代价。
+ */
 class GridMap {
 public:
   GridMap() {}
@@ -168,6 +174,7 @@ public:
   inline void setOccupied(Eigen::Vector3d pos);
   inline int getOccupancy(Eigen::Vector3d pos);
   inline int getOccupancy(Eigen::Vector3i id);
+  /** 按 yaw 查询前后双圆柱中心；返回 1 占用、0 自由、-1 越界。 */
   inline int getInflateOccupancy(Eigen::Vector3d pos, double yaw);
 
   inline void boundIndex(Eigen::Vector3i& id);
@@ -213,7 +220,7 @@ private:
   void updateOccupancyCallback(const ros::TimerEvent& /*event*/);
   void visCallback(const ros::TimerEvent& /*event*/);
 
-  // main update process
+  // 深度图先反投影成世界点，随后与 LiDAR 点云共用 raycastProcess 融合路径。
   void projectDepthImage();
   void raycastProcess();
 
@@ -269,6 +276,7 @@ private:
  * ============================== */
 
 inline int GridMap::toAddress(const Eigen::Vector3i& id) {
+  // 世界索引逐维取模形成环形缓冲地址；窗口平移无需搬移仍在窗口内的数据。
   return getLocalIndex(id(0), 0) * mp_.map_voxel_num_(1) * mp_.map_voxel_num_(2) +
          getLocalIndex(id(1), 1) * mp_.map_voxel_num_(2) + getLocalIndex(id(2), 2);
 }
@@ -363,6 +371,8 @@ inline int GridMap::getOccupancy(Eigen::Vector3d pos) {
 }
 
 inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
+  // 一个圆柱半径已编码进膨胀层；这里沿机体航向查询前后两个圆柱中心，
+  // 合起来近似四足机器人细长的平面扫掠外形。
   Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
   Eigen::Vector3d front = pos + mp_.double_cylinder_offset_ * heading;
   Eigen::Vector3d rear = pos - mp_.double_cylinder_offset_ * heading;

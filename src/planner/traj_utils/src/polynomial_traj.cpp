@@ -5,6 +5,8 @@ PolynomialTraj PolynomialTraj::minSnapTraj(const Eigen::MatrixXd &Pos, const Eig
                                            const Eigen::Vector3d &end_vel, const Eigen::Vector3d &start_acc,
                                            const Eigen::Vector3d &end_acc, const Eigen::VectorXd &Time)
 {
+  // 每轴独立求解相同的时间/约束矩阵，仅右端点值不同。
+  // 当前每段采用五次多项式，代价矩阵实际积分三阶导平方（minimum jerk）。
   int seg_num = Time.size();
   Eigen::MatrixXd poly_coeff(seg_num, 3 * 6);
   Eigen::VectorXd Px(6 * seg_num), Py(6 * seg_num), Pz(6 * seg_num);
@@ -20,6 +22,8 @@ PolynomialTraj PolynomialTraj::minSnapTraj(const Eigen::MatrixXd &Pos, const Eig
   };
 
   /* ---------- end point derivative ---------- */
+  // 每段导数向量排列为 [p(0), p(T), v(0), v(T), a(0), a(T)]。
+  // 内部路点的位置固定，内部速度和加速度留作后续闭式优化变量。
   Eigen::VectorXd Dx = Eigen::VectorXd::Zero(seg_num * 6);
   Eigen::VectorXd Dy = Eigen::VectorXd::Zero(seg_num * 6);
   Eigen::VectorXd Dz = Eigen::VectorXd::Zero(seg_num * 6);
@@ -57,6 +61,8 @@ PolynomialTraj PolynomialTraj::minSnapTraj(const Eigen::MatrixXd &Pos, const Eig
   }
 
   /* ---------- Mapping Matrix A ---------- */
+  // A 把每段多项式系数映射为上述端点导数。它是分块对角矩阵，
+  // 每个 6x6 块只取决于该段持续时间。
   Eigen::MatrixXd Ab;
   Eigen::MatrixXd A = Eigen::MatrixXd::Zero(seg_num * 6, seg_num * 6);
 
@@ -73,6 +79,8 @@ PolynomialTraj PolynomialTraj::minSnapTraj(const Eigen::MatrixXd &Pos, const Eig
   }
 
   /* ---------- Produce Selection Matrix C' ---------- */
+  // Ct 将相邻段重复的端点导数合并为一份变量，显式保证段间位置、速度、
+  // 加速度连续，并将变量重排为“固定约束 Df + 自由内部导数 Dp”。
   Eigen::MatrixXd Ct, C;
 
   num_f = 2 * seg_num + 4; // 3 + 3 + (seg_num - 1) * 2 = 2m + 4
@@ -109,7 +117,8 @@ PolynomialTraj PolynomialTraj::minSnapTraj(const Eigen::MatrixXd &Pos, const Eig
   Eigen::VectorXd Dy1 = C * Dy;
   Eigen::VectorXd Dz1 = C * Dz;
 
-  /* ---------- minimum snap matrix ---------- */
+  /* ---------- integrated squared jerk matrix ---------- */
+  // Q 满足 c^T Q c = integral_0^T ||p'''(t)||^2 dt。
   Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(seg_num * 6, seg_num * 6);
 
   for (int k = 0; k < seg_num; k++)
@@ -144,6 +153,8 @@ PolynomialTraj PolynomialTraj::minSnapTraj(const Eigen::MatrixXd &Pos, const Eig
   Rpp = R.block(2 * seg_num + 4, 2 * seg_num + 4, 2 * seg_num - 2, 2 * seg_num - 2);
 
   /* ---------- close form solution ---------- */
+  // 对自由变量令二次代价梯度为零，得到 Dp=-Rpp^{-1}Rpf*Df；
+  // 再经 A^{-1}Ct 映射回每段多项式系数。
 
   Eigen::VectorXd Dxp(2 * seg_num - 2), Dyp(2 * seg_num - 2), Dzp(2 * seg_num - 2);
   Dxp = -(Rpp.inverse() * Rfp.transpose()) * Dxf;
@@ -188,6 +199,7 @@ PolynomialTraj PolynomialTraj::one_segment_traj_gen(const Eigen::Vector3d &start
                                                     const Eigen::Vector3d &end_pt, const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
                                                     double t)
 {
+  // 五次多项式有 6 个系数，正好由 t=0/T 处的位置、速度、加速度确定。
   Eigen::MatrixXd C = Eigen::MatrixXd::Zero(6, 6), Crow(1, 6);
   Eigen::VectorXd Bx(6), By(6), Bz(6);
 

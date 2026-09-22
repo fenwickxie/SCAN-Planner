@@ -15,6 +15,8 @@ using scan_planner::UniformBspline;
 
 namespace
 {
+// 开环控制器不计算速度指令，而是假设机器人精确位于规划样条上并直接
+// 发布理想里程计。适合验证多楼层几何轨迹，不可用于评估真实跟踪性能。
 ros::Publisher odom_pub;
 
 bool receive_traj = false;
@@ -72,6 +74,8 @@ bool parseBspline(const scan_planner::BsplineConstPtr& msg, UniformBspline& pos_
   for (size_t i = 0; i < msg->knots.size(); ++i)
     knots(i) = msg->knots[i];
 
+  // 构造函数中的 0.1 只用于建立临时均匀节点，随后立即由消息中的真实
+  // knots 覆盖，因此不会改变规划器发布的轨迹时间参数化。
   pos_traj = UniformBspline(pos_pts, msg->order, 0.1);
   pos_traj.setKnot(knots);
   return true;
@@ -113,6 +117,8 @@ void publishOdom(const ros::TimerEvent&)
     publishState(now, current_pos, current_vel, last_yaw, 0.0);
     return;
   }
+  // hold_final_position=true 时在轨迹结束后继续发布末端静止状态，保证
+  // 下游地图和模型仍有连续位姿输入。
   if (!hold_final_position && elapsed > traj_duration)
     return;
 
@@ -131,6 +137,7 @@ void publishOdom(const ros::TimerEvent&)
   if (horizontal_speed > yaw_min_speed)
     last_yaw = std::atan2(vel.y(), vel.x());
 
+  // 平面曲线切向角速度：d atan2(vy,vx)/dt = (vx*ay-vy*ax)/|v_xy|^2。
   const double yaw_rate = horizontal_speed > yaw_min_speed
                               ? (vel.x() * acc.y() - vel.y() * acc.x()) /
                                     std::max(horizontal_speed * horizontal_speed, 1e-6)

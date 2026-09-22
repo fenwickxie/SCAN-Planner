@@ -13,6 +13,11 @@ using std::vector;
 namespace scan_planner
 {
 
+  /**
+   * 从当前起点延伸到最终目标的参考轨迹。
+   * 当局部轨迹替换全局参考的一段后，通过 local_start/end_time 和
+   * time_increase 维护新旧时间轴映射，使查询接口仍使用统一全局时间。
+   */
   class GlobalTrajData
   {
   private:
@@ -35,6 +40,7 @@ namespace scan_planner
 
     void setGlobalTraj(const PolynomialTraj &traj, const ros::Time &time)
     {
+      // 新目标会清除所有旧局部拼接信息，从原始多项式参考重新开始推进。
       global_traj_ = traj;
       global_traj_.init();
       global_duration_ = global_traj_.getTimeSum();
@@ -50,6 +56,8 @@ namespace scan_planner
 
     void setLocalTraj(UniformBspline traj, double local_ts, double local_te, double time_inc)
     {
+      // 局部样条替换 [local_ts, local_te] 后可能改变总时长，time_inc 用于
+      // 将替换段之后的查询时刻映射回原多项式时间轴。
       local_traj_.resize(3);
       local_traj_[0] = traj;
       local_traj_[1] = local_traj_[0].getDerivative();
@@ -64,6 +72,7 @@ namespace scan_planner
 
     Eigen::Vector3d getPosition(double t)
     {
+      // 查询被分成局部替换段之前、之内、之后三种情况；速度和加速度同理。
       if (t >= -1e-3 && t <= local_start_time_)
       {
         return global_traj_.evaluate(t - time_increase_ + last_time_inc_);
@@ -191,7 +200,7 @@ namespace scan_planner
   struct PlanParameters
   {
     /* planning algorithm parameters */
-    double max_vel_, max_acc_, max_jerk_; // physical limits
+    double max_vel_, max_acc_, max_jerk_; // max_jerk 当前仅加载，尚未用于约束
     double vel_tolerance_, acc_tolerance_;
     double ctrl_pt_dist;                  // distance between adjacient B-spline control points
     double feasibility_tolerance_;        // permitted ratio of vel/acc exceeding limits
@@ -205,7 +214,7 @@ namespace scan_planner
 
   struct LocalTrajData
   {
-    /* info of generated traj */
+    // 控制器实际执行的最新轨迹；速度和加速度由位置样条解析求导得到。
 
     int traj_id_;
     double duration_;

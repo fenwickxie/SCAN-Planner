@@ -15,6 +15,10 @@
 using std::vector;
 namespace scan_planner
 {
+  /**
+   * 规划调试数据到 RViz Marker 的无状态适配层。
+   * 不参与规划判断；无订阅者时高层显示函数会直接返回以节省采样开销。
+   */
   class PlanningVisualization
   {
   private:

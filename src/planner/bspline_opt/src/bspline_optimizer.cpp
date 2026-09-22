@@ -65,6 +65,8 @@ namespace scan_planner
     }
 
     /*** Segment the initial trajectory according to obstacles ***/
+    // 相邻控制点间按小于半个体素采样，避免控制点本身自由但连线穿障。
+    // ENOUGH_INTERVAL 用连续状态去抖，降低单个噪声体素造成的伪碰撞段。
     constexpr int ENOUGH_INTERVAL = 2;
     double step_size = grid_map_->getResolution() / ((init_points.col(0) - init_points.rightCols(1)).norm() / (init_points.cols() - 1)) / 2;
     int in_id = -1, out_id = -1;
@@ -149,6 +151,7 @@ namespace scan_planner
     }
 
     /*** calculate bounds ***/
+    // 相邻碰撞段之间在控制点索引中点处分界，保证每个控制点只归属一个区段。
     int id_low_bound, id_up_bound;
     vector<std::pair<int, int>> bounds(segment_ids.size());
     for (size_t i = 0; i < segment_ids.size(); i++)
@@ -221,11 +224,11 @@ namespace scan_planner
         continue;
       }
 
-      // step 1
+      // 清空本碰撞段的临时交点标志。
       for (int j = final_segment_ids[i].first; j <= final_segment_ids[i].second; ++j)
         cps_.flag_temp[j] = false;
 
-      // step 2
+      // 用局部轨迹法平面与 A* 折线求交；交点所在一侧就是控制点应反弹的自由侧。
       int got_intersection_id = -1;
       for (int j = segment_ids[i].first + 1; j < segment_ids[i].second; ++j)
       {
@@ -416,6 +419,8 @@ namespace scan_planner
         double dist_err = cps_.clearance - dist;
         Eigen::Vector3d dist_grad = cps_.direction[i][j];
 
+        // 安全距离外无代价；靠近边界使用三次函数获得平滑梯度；深入区域
+        // 切换为与其函数值/一阶导连续的二次函数，防止梯度数值爆炸。
         if (dist_err < 0)
         {
           /* do nothing */
@@ -441,7 +446,8 @@ namespace scan_planner
 
     int end_idx = q.cols() - order_;
 
-    // def: f = |x*v|^2/a^2 + |x×v|^2/b^2
+    // 将误差分解到参考切向和平面法向。a^2=25、b^2=1 表示横向偏离
+    // 比沿轨迹方向前后滑动惩罚更重，避免 refine 把几何路线拉离参考。
     double a2 = 25, b2 = 1;
     for (auto i = order_ - 1; i < end_idx + 1; ++i)
     {
@@ -474,6 +480,7 @@ namespace scan_planner
     {
       Eigen::Vector3d jerk, temp_j;
 
+      // 三阶有限差分与均匀 B 样条 jerk 控制点成比例；平方和使曲率变化平滑。
       for (int i = 0; i < q.cols() - 3; i++)
       {
         /* evaluate jerk */
@@ -524,6 +531,8 @@ namespace scan_planner
     ts_inv2 = 1 / ts / ts;
     ts_inv3 = 1 / ts / ts / ts;
 
+    // 这是逐轴软约束：只对超过阈值的部分施加平方代价。发布前仍有
+    // UniformBspline::checkFeasibility 和连续轨迹采样两层硬检查。
     /* velocity feasibility */
     for (int i = 0; i < q.cols() - 1; i++)
     {
@@ -1146,11 +1155,13 @@ namespace scan_planner
     calcDistanceCostRebound(cps_.points, f_distance, g_distance, iter_num_, f_smoothness);
     calcFeasibilityCost(cps_.points, f_feasibility, g_feasibility);
 
+    // rebound 不含 fitness：此阶段允许轨迹明显离开原参考以跨越障碍拓扑。
     f_combine = lambda1_ * f_smoothness + new_lambda2_ * f_distance + lambda3_ * f_feasibility;
     //printf("origin %f %f %f %f\n", f_smoothness, f_distance, f_feasibility, f_combine);
 
     Eigen::MatrixXd grad_3D = lambda1_ * g_smoothness + new_lambda2_ * g_distance +
                               lambda3_ * g_feasibility;
+    // 高度由上层生成的线性 Z 参考固定，优化器只改变 XY，避免产生不可执行的跳跃。
     grad_3D.row(2).setZero();
     memcpy(grad, grad_3D.data() + 3 * order_, n * sizeof(grad[0]));
   }
@@ -1174,6 +1185,7 @@ namespace scan_planner
     calcFeasibilityCost(cps_.points, f_feasibility, g_feasibility);
 
     /* ---------- convert to solver format...---------- */
+    // refine 在时间重分配后恢复轨迹形状，不再重算碰撞梯度；调用方随后重新采样验碰。
     f_combine = lambda1_ * f_smoothness + lambda4_ * f_fitness + lambda3_ * f_feasibility;
     // printf("origin %f %f %f %f\n", f_smoothness, f_fitness, f_feasibility, f_combine);
 

@@ -9,6 +9,7 @@
 
 namespace mocka {
 
+/** 程序化点云地图生成器；所有尺寸先换算到离散栅格，再输出 world 系点云。 */
 class Maps {
 public:
   typedef struct BasicInfo {
@@ -29,6 +30,7 @@ public:
   Maps();
 
 public:
+  /** 按 type 分派 Perlin、二维迷宫、随机立柱或三维迷宫生成算法。 */
   void generate(int type);
 
 private:
@@ -46,6 +48,7 @@ private:
   void optimizeMap();
 };
 
+/** 迷宫生成中的候选门/墙连接，保存端点及到区域边界的距离。 */
 class MazePoint {
 private:
   pcl::PointXYZ point;

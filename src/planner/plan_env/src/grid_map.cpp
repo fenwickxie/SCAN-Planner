@@ -77,6 +77,7 @@ void GridMap::initMap(ros::NodeHandle &nh)
   mp_.map_origin_ = Eigen::Vector3d(-x_size / 2.0, -y_size / 2.0, mp_.ground_height_);
   mp_.map_size_ = Eigen::Vector3d(x_size, y_size, z_size);
 
+  // log-odds 把贝叶斯概率融合变成加法，同时可用上下界防止置信度饱和。
   mp_.prob_hit_log_ = logit(mp_.p_hit_);
   mp_.prob_miss_log_ = logit(mp_.p_miss_);
   mp_.clamp_min_log_ = logit(mp_.p_min_);
@@ -105,6 +106,7 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   int buffer_size = mp_.map_voxel_num_(0) * mp_.map_voxel_num_(1) * mp_.map_voxel_num_(2);
 
+  // 未观测值故意设得略低于 clamp_min，借此与“已观测自由”区分。
   md_.occupancy_buffer_ = vector<double>(buffer_size, mp_.clamp_min_log_ - mp_.unknown_flag_);
   md_.occupancy_buffer_inflate_ = vector<char>(buffer_size, 0);
   md_.occupancy_buffer_inflate_cnt_ = vector<int>(buffer_size, 0);
@@ -194,6 +196,7 @@ void GridMap::rebuildInflationOffsets()
   const int inf_step_z_up = ceil(mp_.obstacles_inflation_z_up / mp_.resolution_);
   const int inf_step_z_down = ceil(mp_.obstacles_inflation_z_down / mp_.resolution_);
 
+  // 预计算圆形 XY 截面和非对称 Z 范围，后续每次障碍状态变化只遍历此表。
   md_.inflate_offsets_.clear();
   for (int x = -inf_step_xy; x <= inf_step_xy; ++x)
     for (int y = -inf_step_xy; y <= inf_step_xy; ++y)
@@ -254,6 +257,8 @@ void GridMap::updateInflationLayer(const Eigen::Vector3i& id, int delta,
     if (ignore_mask && (*ignore_mask)[addr])
       continue;
 
+    // 多个障碍体素的膨胀区域可能重叠，引用计数确保删除其中一个障碍时
+    // 不会误清除仍由其他障碍覆盖的膨胀体素。
     cnt_buffer[addr] += delta;
     if (cnt_buffer[addr] < 0)
       cnt_buffer[addr] = 0;
@@ -276,6 +281,7 @@ void GridMap::applyOccupancyUpdate(const Eigen::Vector3i& id, double new_log_odd
   const bool was_occ = md_.occupancy_buffer_[addr] > mp_.min_occupancy_log_;
   const bool now_occ = new_log_odds > mp_.min_occupancy_log_;
 
+  // 只有跨越占用阈值时才增减膨胀引用计数，避免每次概率微调都重建膨胀层。
   md_.occupancy_buffer_[addr] = new_log_odds;
   if (was_occ != now_occ)
     updateInflation(id, now_occ ? 1 : -1);
@@ -314,6 +320,7 @@ void GridMap::updateSlidingMap(const Eigen::Vector3d& center)
   if (shift_num.cwiseAbs().maxCoeff() < mp_.map_sliding_thresh_vox_)
     return;
 
+  // 一次移动超过任一维窗口大小时已无可复用重叠区域，直接全量清空更可靠。
   if ((shift_num.cwiseAbs().array() >= mp_.map_voxel_num_.array()).any())
   {
     resetAllMapData();
@@ -325,6 +332,8 @@ void GridMap::updateSlidingMap(const Eigen::Vector3d& center)
   }
 
   const int buffer_size = mp_.map_voxel_num_(0) * mp_.map_voxel_num_(1) * mp_.map_voxel_num_(2);
+  // 三个维度移出的切片会在棱边重复，clear_mask 用于去重；先撤销全部
+  // 膨胀贡献，再清数据，避免循环地址已更新后无法恢复其世界索引。
   std::vector<char> clear_mask(buffer_size, 0);
   std::vector<int> clear_addrs;
   clear_addrs.reserve(buffer_size / 8);
@@ -440,6 +449,8 @@ int GridMap::setCacheOccupancy(Eigen::Vector3d pos, int occ)
 
   int idx_ctns = toAddress(id);
 
+  // 一帧中同一体素可能被多条射线访问。只入队一次，但保留命中与总次数，
+  // 最终按多数证据决定该帧使用 hit 还是 miss 更新。
   md_.count_hit_and_miss_[idx_ctns] += 1;
 
   if (md_.count_hit_and_miss_[idx_ctns] == 1)
@@ -506,7 +517,7 @@ void GridMap::projectDepthImage()
         depth = mp_.max_ray_length_ + 0.1;
       }
 
-      // project to world frame
+      // 针孔模型先把像素反投影到相机系，再由同步到的传感器姿态变换到世界系。
       pt_cur(0) = (u - mp_.cx_) * depth / mp_.fx_;
       pt_cur(1) = (v - mp_.cy_) * depth / mp_.fy_;
       pt_cur(2) = depth;
@@ -549,6 +560,8 @@ void GridMap::raycastProcess()
   Eigen::Vector3d half = Eigen::Vector3d(0.5, 0.5, 0.5);
   Eigen::Vector3d ray_pt, pt_w;
 
+  // 对每个端点：有效量程内终点为 hit；越界或超量程时截断并记为 miss；
+  // 原点到终点之间由 RayCaster 遍历的体素全部作为自由证据。
   for (int i = 0; i < md_.proj_points_cnt; ++i)
   {
     pt_w = md_.proj_points_[i];
@@ -652,6 +665,7 @@ void GridMap::raycastProcess()
 
   // std::cout << "cache all: " << md_.cache_voxel_.size() << std::endl;
 
+  // 一帧射线全部完成后统一融合 log-odds，使结果不依赖点云遍历顺序。
   while (!md_.cache_voxel_.empty())
   {
 

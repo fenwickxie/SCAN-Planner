@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+// 将离线 PCD 作为静态全局环境周期发布。该点云供 local_sensing 渲染器
+// 使用，而不是直接作为规划地图；规划器仍只融合模拟传感器的局部观测。
 int main(int argc, char** argv) {
   ros::init(argc, argv, "map_pub");
   ros::NodeHandle node;
@@ -50,6 +52,7 @@ int main(int argc, char** argv) {
   std::vector<int> finite_indices;
   pcl::removeNaNFromPointCloud(cloud, cloud, finite_indices);
 
+  // 可选体素滤波降低渲染器负载；叶尺寸过大会吞掉细杆和薄墙。
   if (downsample_res > 0.0) {
     pcl::VoxelGrid<pcl::PointXYZ> voxel_sampler;
     voxel_sampler.setInputCloud(cloud.makeShared());
@@ -78,6 +81,7 @@ int main(int argc, char** argv) {
   pcl::toROSMsg(cloud, msg);
   msg.header.frame_id = frame_id;
 
+  // latch=true 使后启动的渲染节点无需等待下一周期即可收到最后一张地图。
   ros::Publisher cloud_pub =
       node.advertise<sensor_msgs::PointCloud2>(cloud_topic, 10, true);
 

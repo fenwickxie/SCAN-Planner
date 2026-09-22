@@ -1,9 +1,13 @@
 #include "pose_utils.h"
 
+// 通用位姿数学工具。角度单位均为弧度，四元数排列统一为 [w,x,y,z]；
+// 欧拉角采用 ZYX（yaw-pitch-roll）组合，调用方需注意 pitch=+-pi/2 的奇异性。
+
 // Rotation ---------------------
 
 mat ypr_to_R(const colvec& ypr)
 {
+  // 先绕 X roll，再绕 Y pitch，最后绕 Z yaw：R = Rz * Ry * Rx。
   double c, s;
   mat Rz = zeros<mat>(3,3);
   double y = ypr(0);
@@ -70,6 +74,7 @@ colvec R_to_ypr(const mat& R)
 
 mat quaternion_to_R(const colvec& q)
 {
+  // 输入先归一化，避免消息或累计误差使结果不再是正交旋转矩阵。
   double n = norm(q, 2);
   colvec nq = q / n;
 
@@ -103,6 +108,8 @@ mat quaternion_to_R(const colvec& q)
 
 colvec R_to_quaternion(const mat& R)
 {
+  // 根据迹或最大对角元素选择数值最稳定的分支，避免旋转接近 180 度时
+  // 用很小的分母恢复四元数分量。
   colvec q(4);
   double  tr = R(0,0) + R(1,1) + R(2,2);
   if (tr > 0) 

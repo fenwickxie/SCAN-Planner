@@ -7,6 +7,8 @@ using std::cout;
 using std::endl;
 namespace scan_planner
 {
+  // 可视化层不参与任何规划决策；所有函数只把 Eigen 点集转换为 RViz Marker。
+  // 规划算法不应依赖是否存在 RViz 订阅者。
   PlanningVisualization::PlanningVisualization(ros::NodeHandle &nh)
   {
     node = nh;
@@ -28,6 +30,8 @@ namespace scan_planner
     sphere.type = visualization_msgs::Marker::SPHERE_LIST;
     line_strip.type = visualization_msgs::Marker::LINE_STRIP;
     sphere.action = line_strip.action = visualization_msgs::Marker::ADD;
+    // 同一路径用 SPHERE_LIST 显示采样点、LINE_STRIP 显示连线；ID 相差 1000
+    // 以便 RViz 在同一 namespace 内分别更新而不互相覆盖。
     sphere.id = id;
     line_strip.id = id + 1000;
 
@@ -218,6 +222,8 @@ namespace scan_planner
     points.reserve(sample_num);
     speeds.reserve(sample_num);
 
+    // 先扫描速度范围，再把低速映射为白色、高速映射为红色；这是单条轨迹
+    // 内的相对色标，不可直接比较不同轨迹的绝对速度。
     double min_speed = std::numeric_limits<double>::max();
     double max_speed = 0.0;
     for (int i = 0; i < sample_num; ++i)

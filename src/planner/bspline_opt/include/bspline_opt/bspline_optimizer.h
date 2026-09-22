@@ -8,22 +8,21 @@
 #include <ros/ros.h>
 #include "bspline_opt/lbfgs.hpp"
 
-// Gradient and elastic band optimization
-
-// Input: a signed distance field and a sequence of points
-// Output: the optimized sequence of points
-// The format of points: N x 3 matrix, each row is a point
 namespace scan_planner
 {
 
+  /**
+   * 控制点及其 rebound 几何约束。
+   * 每个可优化控制点可对应多个障碍基点/自由方向，以表达多个碰撞区段。
+   */
   class ControlPoints
   {
   public:
     double clearance;
     int size;
     Eigen::MatrixXd points;
-    std::vector<std::vector<Eigen::Vector3d>> base_point; // The point at the start of the direction vector (collision point)
-    std::vector<std::vector<Eigen::Vector3d>> direction;  // Direction vector, must be normalized.
+    std::vector<std::vector<Eigen::Vector3d>> base_point; // 障碍边界附近的排斥基点
+    std::vector<std::vector<Eigen::Vector3d>> direction;  // 从障碍指向 A* 自由侧的单位方向
     std::vector<bool> flag_temp;                          // A flag that used in many places. Initialize it every time before using it.
     // std::vector<bool> occupancy;
 
@@ -44,6 +43,11 @@ namespace scan_planner
     }
   };
 
+  /**
+   * 基于 LBFGS 的三次 B 样条控制点优化器。
+   * rebound 阶段优化平滑/碰撞/动力学，refine 阶段在时间拉伸后优化
+   * 平滑/参考贴合/动力学；两阶段固定首尾控制点并只优化 XY。
+   */
   class BsplineOptimizer
   {
 
@@ -77,6 +81,7 @@ namespace scan_planner
     AStar::Ptr a_star_;
     std::vector<Eigen::Vector3d> ref_pts_;
 
+    /** 检测碰撞段，以 A* 路径为每个相关控制点构造 rebound 方向。 */
     std::vector<std::vector<Eigen::Vector3d>> initControlPoints(Eigen::MatrixXd &init_points, bool flag_first_init = true);
     bool BsplineOptimizeTrajRebound(Eigen::MatrixXd &optimal_points, double ts); // must be called after initControlPoints()
     bool BsplineOptimizeTrajRefine(const Eigen::MatrixXd &init_points, const double ts, Eigen::MatrixXd &optimal_points);
@@ -109,7 +114,7 @@ namespace scan_planner
 
     /* optimization parameters */
     int order_;                    // bspline degree
-    double lambda1_;               // jerk smoothness weight
+    double lambda1_;               // 控制点三阶差分（jerk）平滑权重
     double lambda2_, new_lambda2_; // distance weight
     double lambda3_;               // feasibility weight
     double lambda4_;               // curve fitting
@@ -136,6 +141,7 @@ namespace scan_planner
                             Eigen::MatrixXd &gradient, bool falg_use_jerk = true);
     void calcFeasibilityCost(const Eigen::MatrixXd &q, double &cost,
                              Eigen::MatrixXd &gradient);
+    // dist0 内使用连续分段多项式产生沿 direction 远离 base_point 的梯度。
     void calcDistanceCostRebound(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient, int iter_num, double smoothness_cost);
     void calcFitnessCost(const Eigen::MatrixXd &q, double &cost, Eigen::MatrixXd &gradient);
     bool check_collision_and_rebound(void);

@@ -34,6 +34,10 @@
 #include <deque>
 #include <numeric>
 
+// CPU/PCL 传感器模拟器：全局地图只作为隐藏的“真实环境”，节点根据机体
+// 位姿、传感器外参、量程和视场生成局部点云或深度图。规划器不会直接读取
+// 全局地图，而是像真实机器人一样只融合这里发布的局部观测。
+
 // #define DEBUG
 
 #define likely(x) __builtin_expect(!!(x), 1) // gcc function, for if optimization
@@ -187,6 +191,8 @@ nav_msgs::Odometry makeSensorPoseMsg(const nav_msgs::Odometry &body_odom,
                                      const Eigen::Matrix4d &sensor_pose,
                                      const std::string &child_frame_id)
 {
+  // GridMap 需要世界系传感器位姿作为射线原点；保留机体消息时间戳，确保
+  // 深度模式下 message_filters 能把图像与对应姿态近似同步。
   Eigen::Quaterniond q(sensor_pose.block<3, 3>(0, 0));
   q.normalize();
 
@@ -245,6 +251,8 @@ void publishPinholeDepth(const ros::Time &stamp)
 
   cv::Mat depth_image(cam_height, cam_width, CV_32FC1, cv::Scalar(0.0f));
 
+  // 先用 KD-tree 取相机量程内候选点，再变换到相机系投影到像素。
+  // 同一像素只保留最小 z，等价于软件 z-buffer，可处理前景遮挡背景。
   const Eigen::Matrix4d world2camera = sensor2world.inverse();
   const Eigen::Vector3d camera_pos(sensor2world(0, 3), sensor2world(1, 3), sensor2world(2, 3));
   const double max_depth = std::max(0.1, sensing_horizon);

@@ -12,7 +12,8 @@ double mod(double value, double modulus) {
 }
 
 double intbound(double s, double ds) {
-  // Find the smallest positive t such that s+t*ds is an integer.
+  // 求最小正参数 t，使 s+t*ds 到达下一个整数栅格面。
+  // 负方向通过同时取反转换为正方向，保证返回的 t 非负。
   if (ds < 0) {
     return intbound(-s, -ds);
   } else {
@@ -43,7 +44,7 @@ void Raycast(const Eigen::Vector3d& start, const Eigen::Vector3d& end, const Eig
   // (i.e. change the integer part of the coordinate) in the variables
   // tMaxX, tMaxY, and tMaxZ.
 
-  // Cube containing origin point.
+  // 起终点先取 floor，得到各自所在的体素索引。
   int x = (int)std::floor(start.x());
   int y = (int)std::floor(start.y());
   int z = (int)std::floor(start.z());
@@ -65,6 +66,8 @@ void Raycast(const Eigen::Vector3d& start, const Eigen::Vector3d& end, const Eig
 
   // See description above. The initial values depend on the fractional
   // part of the origin.
+  // tMax* 表示从起点沿射线到“下一个该轴栅格面”的归一化参数；
+  // tDelta* 表示同一轴连续两个栅格面之间的参数增量。
   double tMaxX = intbound(start.x(), dx);
   double tMaxY = intbound(start.y(), dy);
   double tMaxZ = intbound(start.z(), dz);
@@ -103,6 +106,7 @@ void Raycast(const Eigen::Vector3d& start, const Eigen::Vector3d& end, const Eig
     // X axis, and similarly for Y and Z. Therefore, choosing the least tMax
     // chooses the closest cube boundary. Only the first case of the four
     // has been commented in detail.
+    // 每次跨越参数 t 最小的栅格面，因此不会遗漏射线经过的体素。
     if (tMaxX < tMaxY) {
       if (tMaxX < tMaxZ) {
         // Update which cube we are now in.
@@ -228,6 +232,7 @@ void Raycast(const Eigen::Vector3d& start, const Eigen::Vector3d& end, const Eig
 bool RayCaster::setInput(const Eigen::Vector3d& start,
                          const Eigen::Vector3d& end /* , const Eigen::Vector3d& min,
                          const Eigen::Vector3d& max */) {
+  // 保存全部遍历状态，使调用方可以在循环中每次取一个体素。
   start_ = start;
   end_ = end;
   // max_ = max;
@@ -278,6 +283,8 @@ bool RayCaster::step(Eigen::Vector3d& ray_pt) {
   // if (x_ >= min_.x() && x_ < max_.x() && y_ >= min_.y() && y_ < max_.y() &&
   // z_ >= min_.z() && z_ <
   // max_.z())
+  // 先返回当前体素，再推进到最近的下一个栅格面；终点体素不作为自由空间返回。
+  // GridMap 会单独把射线终点按 hit/miss 处理，避免同一体素既命中又清空。
   ray_pt = Eigen::Vector3d(x_, y_, z_);
 
   // step_num_++;

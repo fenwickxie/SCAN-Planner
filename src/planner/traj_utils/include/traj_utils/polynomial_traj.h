@@ -6,6 +6,11 @@
 
 using std::vector;
 
+/**
+ * 分段五次多项式参考轨迹。
+ * 每段每轴保存 6 个从高次到常数项排列的系数；它用于生成全局参考和
+ * 局部 B 样条初值，不负责碰撞规避。
+ */
 class PolynomialTraj
 {
 private:
@@ -75,7 +80,7 @@ public:
 
   Eigen::Vector3d evaluate(double t)
   {
-    /* detetrmine segment num */
+    // 逐段扣除持续时间，把全局轨迹时间转换为当前段局部时间。
     int idx = 0;
     while (times[idx] + 1e-4 < t)
     {
@@ -328,6 +333,7 @@ public:
                                     const Eigen::Vector3d &end_vel, const Eigen::Vector3d &start_acc,
                                     const Eigen::Vector3d &end_acc, const Eigen::VectorXd &Time);
 
+  /** 由起终点的位置、速度、加速度 6 个约束唯一确定单段五次多项式。 */
   static PolynomialTraj one_segment_traj_gen(const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
                                              const Eigen::Vector3d &end_pt, const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
                                              double t);

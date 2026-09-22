@@ -11,6 +11,9 @@
 
 #include "maps.hpp"
 
+// mockamap ROS 包装层：读取地图尺寸/随机参数，调用 Maps 一次生成全局点云，
+// 随后周期发布。生成阶段使用“每米栅格数”scale，输出点坐标再换回米。
+
 void
 optimizeMap(mocka::Maps::BasicInfo& in)
 {
@@ -31,6 +34,7 @@ optimizeMap(mocka::Maps::BasicInfo& in)
   }
 
   kdtree.setInputCloud(cloud);
+  // 26 邻域齐全的点位于实体内部；删除它们只保留可见表面，减小点云体积。
   double radius = 1.75 / in.scale; // 1.75 is the rounded up value of sqrt(3)
 
   for (uint32_t i = 0; i < cloud->width; i++)

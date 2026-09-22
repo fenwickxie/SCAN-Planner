@@ -59,6 +59,11 @@ void framebuffer_size_callback(GLFWwindow* window, int screen_width, int screen_
     glViewport(0, 0, screen_width, screen_height);
 }
 
+/**
+ * 离屏 OpenGL 点云渲染后端。
+ * 全局点云上传 GPU 后，通过投影/深度缓冲模拟不同 LiDAR 扫描模式；动态点云
+ * 每帧单独输入。ROS 通信由 opengl_render_node.cpp 负责，本类只处理渲染数据。
+ */
 class opengl_pointcloud_render
 {
     public:
@@ -66,8 +71,10 @@ class opengl_pointcloud_render
     void read_pointcloud_fromfile(std::string map_filename);
     void read_pointcloud_fromcloud(const pcl::PointCloud<PointType>& input_cloud);
     ~opengl_pointcloud_render();
+    /** 配置虚拟成像面、裁剪距离、扫描模式和输出频率；必须在 render 前调用。 */
     void setParameters(int width, int height, float fx, float fy, float downsample_res, float polar_res_, float yaw_fov_,\
                  float vertical_fov_,float near,float far,int sensing_rate,int use_avia_pattern, int use_os128_pattern, int use_minicf_pattern);
+    /** 在给定世界位姿渲染当前可见点，并按选定雷达 pattern 写入输出点云。 */
     void render_pointcloud(pcl::PointCloud<PointType>::Ptr output_pointcloud, Eigen::Vector3f camera_pos, Eigen::Quaternionf camera_q, double t_pattern_start);
     void input_dyn_clouds(pcl::PointCloud<pcl::PointXYZI> input_cloud);
 

@@ -6,6 +6,8 @@ namespace scan_planner
 {
   namespace
   {
+    // 优化器只改变 XY 控制点；先按 XY 累计弧长给采样点分配线性高度，
+    // 可以让楼梯/坡道参考保持单调，避免局部优化产生突兀的垂向运动。
     void applyLinearZReference(std::vector<Eigen::Vector3d> &points, const double start_z, const double target_z)
     {
       if (points.empty())
@@ -57,6 +59,8 @@ namespace scan_planner
     nh.param("manager/control_points_distance", pp_.ctrl_pt_dist, -1.0);
     nh.param("manager/planning_horizon", pp_.planning_horizon_, 5.0);
 
+    // 模块依赖顺序为 GridMap -> BsplineOptimizer -> AStar；AStar 与优化器
+    // 共享地图，确保离散搜索和连续碰撞代价使用相同占用定义。
     local_data_.traj_id_ = 0;
     grid_map_.reset(new GridMap);
     grid_map_->initMap(nh);
@@ -97,6 +101,8 @@ namespace scan_planner
     ros::Duration t_init, t_opt, t_refine;
 
     /*** STEP 1: INIT ***/
+    // ts 同时控制控制点时间间隔和初始采样密度。基础值略大于
+    // ctrl_pt_dist/max_vel，为后续优化保留速度余量。
     double ts = (start_pt - local_target_pt).norm() > 0.1 ? pp_.ctrl_pt_dist / pp_.max_vel_ * 1.2 : pp_.ctrl_pt_dist / pp_.max_vel_ * 5; // pp_.ctrl_pt_dist / pp_.max_vel_ is too tense, and will surely exceed the acc/vel limits
     vector<Eigen::Vector3d> point_set, start_end_derivatives;
     static bool flag_first_call = true, flag_force_polynomial = false;
@@ -107,6 +113,7 @@ namespace scan_planner
       start_end_derivatives.clear();
       flag_regenerate = false;
 
+      // 新目标、恢复或旧轨迹异常时，从满足起终点导数的多项式重新初始化。
       if (flag_first_call || flag_polyInit || flag_force_polynomial /*|| ( start_pt - local_target_pt ).norm() < 1.0*/) // Initial path generated from a min-snap traj by order.
       {
         flag_first_call = false;
@@ -123,6 +130,8 @@ namespace scan_planner
         }
         else
         {
+          // 连续失败时插入随机中间点，改变初值所在的同伦类别，帮助局部优化
+          // 从“总向障碍同一侧绕”的局部极小值中逃逸。
           Eigen::Vector3d horizon_dir = ((start_pt - local_target_pt).cross(Eigen::Vector3d(0, 0, 1))).normalized();
           Eigen::Vector3d vertical_dir = ((start_pt - local_target_pt).cross(horizon_dir)).normalized();
           Eigen::Vector3d random_inserted_pt = (start_pt + local_target_pt) / 2 +
@@ -166,6 +175,7 @@ namespace scan_planner
       }
       else // Initial path generated from previous trajectory.
       {
+        // 保留旧轨迹尚未执行部分，再用多项式接到新局部目标，以维持在线重规划连续性。
 
         double t;
         double t_cur = (ros::Time::now() - local_data_.start_time_).toSec();
@@ -248,6 +258,7 @@ namespace scan_planner
     Eigen::MatrixXd ctrl_pts;
     UniformBspline::parameterizeToBspline(ts, point_set, start_end_derivatives, ctrl_pts);
 
+    // 将初始控制点的碰撞区段映射成 A* 路径及连续优化所需的排斥方向。
     vector<vector<Eigen::Vector3d>> a_star_paths;
     a_star_paths = bspline_optimizer_rebound_->initControlPoints(ctrl_pts, true);
 
@@ -274,6 +285,8 @@ namespace scan_planner
     t_start = ros::Time::now();
 
     /*** STEP 3: REFINE(RE-ALLOCATE TIME) IF NECESSARY ***/
+    // 几何优化成功不代表动力学可执行。必要时拉长节点时间，再以原轨迹
+    // 为 fitness 参考重新优化，避免单纯拉时间后参数化误差改变路径形状。
     UniformBspline pos = UniformBspline(ctrl_pts, 3, ts);
     pos.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
 
@@ -344,7 +357,7 @@ namespace scan_planner
       total_len += (points[i + 1] - points[i]).norm();
     }
 
-    // insert intermediate points if too far
+    // 长段插值提高多段 min-snap 的数值和几何稳定性；这些中间点仍不做避障。
     vector<Eigen::Vector3d> inter_points;
     double dist_thresh = max(total_len / 8, 4.0);
 
@@ -508,6 +521,8 @@ namespace scan_planner
     const double vel_limit = pp_.max_vel_ + pp_.vel_tolerance_;
     const double acc_limit = pp_.max_acc_ + pp_.acc_tolerance_;
 
+    // checkFeasibility() 使用导数控制点的充分条件；此处再采样真实导数曲线，
+    // 作为发布前最后门槛。tolerance 在这里是绝对量，不是比例。
     for (double t = 0.0; t < duration + 1e-6; t += sample_dt)
     {
       const double tc = std::min(t, duration);

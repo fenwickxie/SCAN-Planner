@@ -22,6 +22,8 @@ namespace scan_planner
     n_ = points.cols() - 1;
     m_ = n_ + p_ + 1;
 
+    // 构造等间隔节点向量。有效轨迹参数区间是 [u_p, u_{m-p}]，
+    // evaluateDeBoorT() 再把它平移成对调用方友好的 [0, duration]。
     u_ = Eigen::VectorXd::Zero(m_ + 1);
     for (int i = 0; i <= m_; ++i)
     {
@@ -61,6 +63,7 @@ namespace scan_planner
   Eigen::VectorXd UniformBspline::evaluateDeBoor(const double &u)
   {
 
+    // 超出有效参数域时夹到端点，避免控制器因计时微小越界访问非法节点。
     double ub = min(max(u_(p_), u), u_(m_ - p_));
 
     // determine which [ui,ui+1] lay in
@@ -80,6 +83,8 @@ namespace scan_planner
       // cout << d[i].transpose() << endl;
     }
 
+    // De Boor 递推在局部 p+1 个控制点间逐层线性插值；相比显式计算
+    // B 样条基函数，它只访问局部控制点且在节点附近数值更稳定。
     for (int r = 1; r <= p_; ++r)
     {
       for (int i = p_; i >= r; --i)
@@ -99,8 +104,8 @@ namespace scan_planner
 
   Eigen::MatrixXd UniformBspline::getDerivativeControlPoints()
   {
-    // The derivative of a b-spline is also a b-spline, its order become p_-1
-    // control point Qi = p_*(Pi+1-Pi)/(ui+p_+1-ui+1)
+    // B 样条的导数仍是 B 样条，次数降 1。导数控制点由相邻位置
+    // 控制点差除以对应节点跨度得到，后续可重复调用以构造加速度轨迹。
     Eigen::MatrixXd ctp(control_points_.rows(), control_points_.cols() - 1);
     for (int i = 0; i < ctp.cols(); ++i)
     {
@@ -141,6 +146,8 @@ namespace scan_planner
 
     /* check vel feasibility and insert points */
     double max_vel = -1.0;
+    // B 样条具有凸包性质：若所有导数控制点满足逐轴界限，整条导数曲线也满足。
+    // tolerance 是相对放宽比例；1e-4 仅用于吸收浮点边界误差。
     double enlarged_vel_lim = limit_vel_ * (1.0 + feasibility_tolerance_) + 1e-4;
     for (int i = 0; i < P.cols() - 1; ++i)
     {
@@ -187,6 +194,7 @@ namespace scan_planner
       }
     }
 
+    // 时间放大 r 后速度按 1/r、加速度按 1/r^2 缩小。
     ratio = max(max_vel / limit_vel_, sqrt(fabs(max_acc) / limit_acc_));
 
     return fea;
@@ -194,6 +202,7 @@ namespace scan_planner
 
   void UniformBspline::lengthenTime(const double &ratio)
   {
+    // 保持两端用于边界约束的节点不变，只均匀拉伸内部有效时间区间。
     int num1 = 5;
     int num2 = getKnot().rows() - 1 - 5;
 
@@ -230,7 +239,9 @@ namespace scan_planner
 
     int K = point_set.size();
 
-    // write A
+    // 三次均匀 B 样条在采样节点处的位置、速度、加速度分别对应
+    // [1,4,1]/6、[-1,0,1]/(2ts)、[1,-2,1]/ts^2 的控制点组合。
+    // 将 K 个位置与 4 个边界导数约束写成超定线性系统 A*Q=b。
     Eigen::Vector3d prow(3), vrow(3), arow(3);
     prow << 1, 4, 1;
     vrow << -1, 0, 1;
@@ -265,7 +276,7 @@ namespace scan_planner
       bz(K + i) = start_end_derivative[i](2);
     }
 
-    // solve Ax = b
+    // 对 xyz 三个维度分别使用列主元 QR 求解，避免显式求逆带来的数值误差。
     Eigen::VectorXd px = A.colPivHouseholderQr().solve(bx);
     Eigen::VectorXd py = A.colPivHouseholderQr().solve(by);
     Eigen::VectorXd pz = A.colPivHouseholderQr().solve(bz);

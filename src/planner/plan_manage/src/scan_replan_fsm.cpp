@@ -25,6 +25,7 @@ namespace scan_planner
 
   void SCANReplanFSM::init(ros::NodeHandle &nh)
   {
+    // 所有状态标志在创建 ROS 回调前归零，防止定时器看到半初始化数据。
     current_wp_ = 0;
     exec_state_ = FSM_EXEC_STATE::INIT;
     trigger_ = false;
@@ -83,6 +84,8 @@ namespace scan_planner
     }
 
     /* initialize main modules */
+    // visualization 与 planner_manager 共用 NodeHandle；manager 内部继续创建
+    // GridMap、BsplineOptimizer 和 AStar，形成规划核心对象树。
     visualization_.reset(new PlanningVisualization(nh));
     planner_manager_.reset(new SCANPlannerManager);
     planner_manager_->initPlanModules(nh, visualization_);
@@ -331,6 +334,8 @@ namespace scan_planner
     if (final_occ <= 0)
       return true;
 
+    // 从终点反向寻找全局参考上的最后一个自由点。这样不会为落在障碍内
+    // 的不可达目标无限重试，但调用方必须接受终点被截短这一语义。
     for (int i = sample_num; i >= 0; --i)
     {
       const double t = duration * i / sample_num;
@@ -462,6 +467,8 @@ namespace scan_planner
       return;
 
     LocalTrajData *info = &planner_manager_->local_data_;
+    // 增大 start_time 等价于保持 t_cur = now-start_time 不变，使控制器
+    // 原地校正航向期间规划器与控制器停留在同一个样条时刻。
     if (go2_execution_frozen_ && info->start_time_.toSec() > 1e-5)
       info->start_time_ += ros::Duration(dt);
   }
@@ -567,6 +574,8 @@ namespace scan_planner
       fsm_num = 0;
     }
 
+    // 状态机只在成功规划后发布新轨迹。失败会留在生成/重规划状态重试，
+    // finishProcess() 统一把连续失败升级为急停，避免各分支重复安全逻辑。
     switch (exec_state_)
     {
     case INIT:
@@ -698,6 +707,7 @@ namespace scan_planner
         // cout << "near end" << endl;
         return;
       }
+      // 该阈值衡量沿本次局部轨迹推进的距离，不是实际跟踪误差。
       else if ((info->start_pos_ - pos).norm() < replan_thresh_)
       {
         // cout << "near start" << endl;
@@ -763,6 +773,8 @@ namespace scan_planner
 
     //cout << "info->velocity_traj_=" << info->velocity_traj_.get_control_points() << endl;
 
+    // 参考路径模式以当前样条状态接续，优先保证轨迹导数连续；其他模式
+    // 以真实里程计位置重置参考，优先消除实际跟踪误差。
     if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
     {
       start_pt_ = info->position_traj_.evaluateDeBoorT(t_cur);
@@ -861,6 +873,8 @@ namespace scan_planner
     constexpr double time_step = 0.01;
     double t_cur = (ros::Time::now() - info->start_time_).toSec();
     double t_2_3 = info->duration_ * 2 / 3;
+    // 在线扫描只看当前轨迹有效前段。远端会在周期重规划时被替换，提前
+    // 检查整条轨迹既浪费计算，也可能对尚未感知的未知区域过度反应。
     for (double t = t_cur; t < info->duration_; t += time_step)
     {
       if (t_cur < t_2_3 && t >= t_2_3) // If t_cur < t_2_3, only the first 2/3 partition of the trajectory is considered valid and will get checked.
@@ -986,6 +1000,7 @@ namespace scan_planner
     double t_step = max_vel > 1e-6 ? planning_horizon_ / 20.0 / max_vel : 0.01;
     t_step = std::max(t_step, 0.01);
 
+    // 先把规划起点投影到全局参考，避免每次重规划都从全局轨迹起点累计。
     double t_proj = 0.0;
     double min_dist_to_start = 9999.0;
     for (double t = 0.0; t < duration; t += t_step)
@@ -1005,6 +1020,7 @@ namespace scan_planner
     Eigen::Vector3d prev_pos = planner_manager_->global_data_.getPosition(t_proj);
     local_target_pt_ = end_pt_;
 
+    // planning_horizon 按曲线弧长累计，而不是起点到候选点的直线距离。
     for (double t = t_proj; t < duration; t += t_step)
     {
       Eigen::Vector3d pos_t = planner_manager_->global_data_.getPosition(t);
@@ -1069,6 +1085,7 @@ namespace scan_planner
       }
     }
 
+    // 进入理想制动距离 v^2/(2a) 后要求局部目标速度为零，给终点停车留余量。
     if ((end_pt_ - local_target_pt_).norm() < (max_vel * max_vel) / (2 * max_acc))
     {
       // local_target_vel_ = (end_pt_ - init_pt_).normalized() * planner_manager_->pp_.max_vel_ * (( end_pt_ - local_target_pt_ ).norm() / ((planner_manager_->pp_.max_vel_*planner_manager_->pp_.max_vel_)/(2*planner_manager_->pp_.max_acc_)));

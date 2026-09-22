@@ -30,6 +30,7 @@ void round_v3d(Eigen::Vector3d &vec, int decimal){
 }
 
 void FOV_Checker::check_fov(Eigen::Vector3d cur_pose, Eigen::Vector3d axis, double theta, double depth, vector<BoxPointType> &boxes){
+    // 舍入抑制浮点噪声导致的层索引跳变；归一化后 axis 只表示视轴方向。
     round_v3d(cur_pose,4);
     round_v3d(axis,3);
     axis = axis/axis.norm();
@@ -48,6 +49,8 @@ void FOV_Checker::check_fov(Eigen::Vector3d cur_pose, Eigen::Vector3d axis, doub
     bool flag = false, box_found = false;
     boxes.clear();
     BoxPointType box;
+    // 在 +/-X、+/-Y、+/-Z 六个方向中选择与视轴夹角最小者作为扫描主轴。
+    // 这样圆锥在垂直扫描平面上的截面增长最稳定，可按规则盒层推进。
     axis_angle[0] = acos(axis(0));
     axis_angle[1] = acos(axis(1));
     axis_angle[2] = acos(axis(2));
@@ -128,6 +131,7 @@ void FOV_Checker::check_fov(Eigen::Vector3d cur_pose, Eigen::Vector3d axis, doub
             start_i = -1;
             break;
     }
+    // 每个 i 对应一个垂直主轴的盒层。center_point 是视轴与该层中心面的交点。
     for (i=start_i; i<=maxn; i++){
         center_point = cur_pose + (abs(gap) + (i-1) * box_length)/cos(min_angle) * axis;
         if (index == 1 || index == 4){
@@ -162,6 +166,8 @@ void FOV_Checker::check_fov(Eigen::Vector3d cur_pose, Eigen::Vector3d axis, doub
             box_p_max = plane_u * plane_u_max + start_point.cwiseProduct(plane_w + plane_v) + plane_v * box_length * j +  plane_w * box_length;    
             // if (j == 1) printf("---- UPSIDE (%0.3f,%0.3f,%0.3f),(%0.3f,%0.3f,%0.3f)\n",box_p_min[0],box_p_min[1],box_p_min[2],box_p_max[0],box_p_max[1],box_p_max[2]);
 
+            // 以 2^k 步长二分跳跃，寻找该行与视锥相交的最小 u 索引；
+            // 对另一侧重复得到最大索引，避免逐盒扫描整张平面。
             while (k>=0){
                 box_p = box_p_min + plane_u * box_length * (u_min + pow(2,k)) + plane_v * box_length + plane_w * box_length;
                 box.vertex_min[0] = box_p_min(0);

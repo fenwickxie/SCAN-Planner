@@ -3,6 +3,8 @@
 #define RESET "\033[0m"
 #define RED "\033[31m"
 
+// 备用的一阶优化器。当前主路径使用 LBFGS，但该实现保留给简单目标函数：
+// Barzilai-Borwein 谱步长估计局部尺度，Armijo 回溯保证每步有足够下降。
 GradientDescentOptimizer::RESULT
 GradientDescentOptimizer::optimize(Eigen::VectorXd &x_init_optimal, double &opt_f)
 {
@@ -31,6 +33,7 @@ GradientDescentOptimizer::optimize(Eigen::VectorXd &x_init_optimal, double &opt_
     cost_min = cost_k;
     double max_grad = max(abs(grad_k.maxCoeff()), abs(grad_k.minCoeff()));
     constexpr double MAX_MOVEMENT_AT_FIRST_ITERATION = 0.1; // meter
+    // 限制首次变量最大位移为 0.1，避免尚未估计曲率时一步跨出有效区域。
     double alpha0 = max_grad < MAX_MOVEMENT_AT_FIRST_ITERATION ? 1.0 : (MAX_MOVEMENT_AT_FIRST_ITERATION / max_grad);
     x_kp1 = x_k - alpha0 * grad_k;
     cost_kp1 = objfun_(x_kp1, grad_kp1, force_return, f_data);
@@ -44,6 +47,7 @@ GradientDescentOptimizer::optimize(Eigen::VectorXd &x_init_optimal, double &opt_
     {
         Eigen::VectorXd s = x_kp1 - x_k;
         Eigen::VectorXd y = grad_kp1 - grad_k;
+        // BB2 步长 alpha=(s^T y)/(y^T y) 用前后两次变量/梯度差近似逆 Hessian 尺度。
         double alpha = s.dot(y) / y.dot(y);
         if (isnan(alpha) || isinf(alpha))
         {
@@ -61,7 +65,7 @@ GradientDescentOptimizer::optimize(Eigen::VectorXd &x_init_optimal, double &opt_
                 if (force_return)
                     return RETURN_BY_ORDER;
                 alpha *= 0.5;
-            } while (cost_k > cost_kp1 - 1e-4 * alpha * grad_kp1.transpose() * grad_kp1); // Armijo condition
+            } while (cost_k > cost_kp1 - 1e-4 * alpha * grad_kp1.transpose() * grad_kp1); // Armijo 充分下降条件
 
             if (grad_k.norm() < min_grad_)
             {

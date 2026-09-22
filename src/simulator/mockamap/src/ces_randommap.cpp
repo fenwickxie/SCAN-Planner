@@ -33,6 +33,9 @@
 //! @todo historical above
 #include "maps.hpp"
 
+// 旧版固定地图/局部裁剪示例节点。当前 simulator.xml 默认使用 mockamap_node，
+// 该文件仍保留用于复现实验地图和按里程计截取局部点云的历史工作流。
+
 using namespace std;
 using namespace mocka;
 
@@ -79,6 +82,7 @@ std::vector<Obstacle> obstacle_list;
 void
 fixedMapGenerate()
 {
+  // 障碍列表使用“中心位置 + xyz 尺寸”，随后按固定分辨率采样实体表面。
   double _resolution = 1.0;
 
   cloudMap.points.clear();

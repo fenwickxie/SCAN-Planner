@@ -18,6 +18,8 @@ void AStar::initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size)
     POOL_SIZE_ = pool_size;
     CENTER_IDX_ = pool_size / 2;
 
+    // 节点在初始化时全部分配，后续搜索仅通过 rounds 懒重置访问过的节点。
+    // 这会占用固定内存，但避免在线重规划期间反复 new/delete。
     GridNodeMap_ = new GridNodePtr **[POOL_SIZE_(0)];
     for (int i = 0; i < POOL_SIZE_(0); i++)
     {
@@ -42,6 +44,8 @@ double AStar::getDiagHeu(GridNodePtr node1, GridNodePtr node2)
     double dz = abs(node1->index(2) - node2->index(2));
 
     double h = 0.0;
+    // 优先计入三轴同时移动，再计入双轴对角移动，最后计入单轴移动。
+    // 对应代价分别为 sqrt(3)、sqrt(2) 和 1。
     int diag = min(min(dx, dy), dz);
     dx -= diag;
     dy -= diag;
@@ -78,6 +82,7 @@ double AStar::getEuclHeu(GridNodePtr node1, GridNodePtr node2)
 
 vector<GridNodePtr> AStar::retrievePath(GridNodePtr current)
 {
+    // cameFrom 指向起点方向，因此先得到“终点到起点”，getPath() 再反转。
     vector<GridNodePtr> path;
     path.push_back(current);
 
@@ -101,6 +106,8 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     const double path_yaw = std::atan2(start_to_end(1), start_to_end(0));
     start_to_end.normalize();
 
+    // 初始 B 样条可能已经穿入障碍。沿区段方向把起点向后、终点向前
+    // 推到自由栅格，使 A* 有合法的搜索边界；离开节点池则视为初始化失败。
     int occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
     if (occ)
     {
@@ -149,6 +156,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
 
     step_size_ = step_size;
     inv_step_size_ = 1 / step_size;
+    // 每次把固定节点池平移到待绕障区段中点，限制内存同时覆盖局部搜索区域。
     center_ = (start_pt + end_pt) / 2;
 
     Vector3i start_idx, end_idx;
@@ -164,6 +172,8 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     const Eigen::Vector2d search_xy_delta = search_end.head<2>() - search_start_xy;
     const double search_xy_len2 = search_xy_delta.squaredNorm();
 
+    // 四足机器人的参考高度已在初始轨迹中给出。搜索只在该线性高度面上
+    // 绕开 XY 障碍，避免 A* 自行产生不可执行的垂直爬升/下降路径。
     auto interpolateZIndexOnSearchPlane = [&](const int x_idx, const int y_idx) -> int {
         if (search_xy_len2 < 1e-8)
             return start_idx(2);
@@ -183,6 +193,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     GridNodePtr startPtr = GridNodeMap_[start_idx(0)][start_idx(1)][start_idx(2)];
     GridNodePtr endPtr = GridNodeMap_[end_idx(0)][end_idx(1)][end_idx(2)];
 
+    // priority_queue 没有 clear()；与空队列交换以释放上一轮开放集合内容。
     std::priority_queue<GridNodePtr, std::vector<GridNodePtr>, NodeComparator> empty;
     openSet_.swap(empty);
 
@@ -222,6 +233,8 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
         }
         current->state = GridNode::CLOSEDSET; //move current node from open set to closed set.
 
+        // 仅扩展 XY 八邻域。邻居 Z 由上面的搜索平面插值得到，因此 dz
+        // 仍参与实际移动代价，但不会作为独立搜索维度自由变化。
         for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
             {
@@ -241,6 +254,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                 neighborPtr = GridNodeMap_[neighborIdx(0)][neighborIdx(1)][neighborIdx(2)];
                 neighborPtr->index = neighborIdx;
 
+                // rounds 不匹配表示该节点在本轮尚未访问，其旧 state/score 可忽略。
                 bool flag_explored = neighborPtr->rounds == rounds_;
 
                 if (flag_explored && neighborPtr->state == GridNode::CLOSEDSET)
@@ -262,7 +276,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
 
                 if (!flag_explored)
                 {
-                    //discover a new node
+                    // 首次发现：记录最优父节点并加入开放集合。
                     neighborPtr->state = GridNode::OPENSET;
                     neighborPtr->cameFrom = current;
                     neighborPtr->gScore = tentative_gScore;
@@ -271,12 +285,14 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                 }
                 else if (tentative_gScore < neighborPtr->gScore)
                 { //in open set and need update
+                    // 找到更短路径。节点指针已在优先队列内；更新其分数和父节点。
                     neighborPtr->cameFrom = current;
                     neighborPtr->gScore = tentative_gScore;
                     neighborPtr->fScore = tentative_gScore + getHeu(neighborPtr, endPtr);
                 }
             }
         ros::Time time_2 = ros::Time::now();
+        // 在线规划必须有确定的最坏等待时间，超时后由上层更换初始化或急停。
         if ((time_2 - time_1).toSec() > 0.2)
         {
             ROS_WARN("Failed in A star path searching !!! 0.2 seconds time limit exceeded.");

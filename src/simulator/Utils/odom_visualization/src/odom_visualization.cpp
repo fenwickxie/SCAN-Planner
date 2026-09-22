@@ -15,6 +15,8 @@
 using namespace arma;
 using namespace std;
 
+// 将一条 Odometry 同时转换为姿态、历史路径、速度箭头、协方差、轨迹、
+// 传感器视场和 mesh 等 RViz 消息。所有输出仅用于观察，不反馈给规划器。
 static  string mesh_resource;
 static double color_r, color_g, color_b, color_a, cov_scale, scale;
 
@@ -66,6 +68,8 @@ void odom_callback(const nav_msgs::Odometry::ConstPtr& msg)
   vel(1) = msg->twist.twist.linear.y;
   vel(2) = msg->twist.twist.linear.z;  
   
+  // origin 模式把首帧位姿作为局部可视化原点。速度先从机体系旋到旧世界系，
+  // 位姿变换后再旋到新局部系，保证箭头方向与重定位后的轨迹一致。
   if (origin && !isOriginSet)
   {
     isOriginSet = true;

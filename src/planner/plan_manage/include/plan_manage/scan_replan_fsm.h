@@ -26,6 +26,11 @@ using std::vector;
 namespace scan_planner
 {
 
+  /**
+   * 在线重规划状态机。
+   * ROS 回调只更新输入状态；100 Hz 执行定时器决定规划/执行状态，
+   * 20 Hz 安全定时器独立扫描当前轨迹上的未来碰撞。
+   */
   class SCANReplanFSM
   {
 
@@ -66,8 +71,11 @@ namespace scan_planner
     std::string self_inflation_frame_id_;
 
     /* planning data */
+    // trigger 表示导航模式已被激活；have_target 表示已有可执行的全局参考；
+    // have_new_target 强制下一次局部规划放弃旧轨迹初值，避免接续过时目标。
     bool trigger_, have_target_, have_odom_, have_new_target_;
     bool rviz_height_ready_;
+    // 控制器原地转向时冻结轨迹时钟，防止“机器人没走但轨迹已经跑远”。
     bool go2_execution_frozen_;
     bool enable_fail_safe_, need_hover_stop_;
     FSM_EXEC_STATE exec_state_;
@@ -94,8 +102,10 @@ namespace scan_planner
     ros::Publisher replan_pub_, new_pub_, bspline_pub_, data_disp_pub_, self_inflation_pub_;
 
     /* helper functions */
-    bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
+    /** 选取局部目标、调用规划器，并在成功后序列化发布 B 样条。 */
+    bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
+    /** 从当前执行时刻构造连续起始状态，并按导航模式选择重规划策略。 */
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();
 
@@ -109,6 +119,7 @@ namespace scan_planner
     bool planNextWaypoint();
     bool isWaypointSequenceMode() const;
     bool adjustGlobalTargetIfOccupied();
+    /** 将当前状态投影到全局参考，再沿弧长前推 planning_horizon。 */
     void getLocalTarget();
     void finishProcess();
     void publishSelfInflationMarker();

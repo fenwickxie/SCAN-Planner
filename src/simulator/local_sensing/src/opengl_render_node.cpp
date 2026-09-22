@@ -20,6 +20,10 @@
 #include <tr1/unordered_map>
 #include <tf2_ros/transform_broadcaster.h>
 
+// GPU/OpenGL 传感器模拟器。点云渲染由 opengl_pointcloud_render 完成；
+// 本文件负责 ROS 参数/话题、机体到传感器位姿、动态障碍和消息封装。
+// 深度相机输出仍通过 CPU 侧针孔 z-buffer 生成，以保持标准深度图语义。
+
 using namespace Eigen;
 using namespace std;
 
@@ -167,6 +171,8 @@ nav_msgs::Odometry makeSensorPoseMsg(const nav_msgs::Odometry &body_odom,
 }
 
 bool preparePinholeMap(const pcl::PointCloud<PointType> &raw_cloud) {
+  // 深度投影只需有限、下采样后的环境点。KD-tree 用于每帧先裁出量程内
+  // 候选点，避免逐像素或逐帧遍历整张全局地图。
   pcl::PointCloud<PointType> finite_cloud;
   finite_cloud.points.reserve(raw_cloud.points.size());
   for (const auto &point : raw_cloud.points) {
@@ -249,6 +255,7 @@ void publishPinholeDepth(const ros::Time &stamp) {
 
   cv::Mat depth_image(cam_height, cam_width, CV_32FC1, cv::Scalar(0.0f));
 
+  // 世界点变换到光学坐标系后按内参投影；每个像素保留最近深度，模拟遮挡。
   const Eigen::Matrix4f world2camera = sensor2world.inverse();
   const Eigen::Vector3f camera_pos(sensor2world(0, 3), sensor2world(1, 3), sensor2world(2, 3));
   const double max_depth = std::max(0.1, sensing_horizon);

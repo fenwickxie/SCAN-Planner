@@ -14,7 +14,7 @@ using namespace mocka;
 void
 Maps::randomMapGenerate()
 {
-
+  // 固定 seed 保证实验可复现；每个障碍是随机中心、宽度和高度的空心方柱。
   std::default_random_engine eng(info.seed);
 
   double _resolution = 1 / info.scale;
@@ -77,6 +77,8 @@ Maps::randomMapGenerate()
     const int xy_steps = std::max(1, static_cast<int>(std::ceil(w / surface_resolution)));
     const int z_steps = std::max(1, static_cast<int>(std::ceil(h / surface_resolution)));
 
+    // 只采样四个侧面和上下表面而非填满内部，显著减少全局点云规模；
+    // 对射线传感器而言表面点已经足以表达不可穿越障碍。
     for (int iz = 0; iz <= z_steps; ++iz)
     {
       const double z = h * iz / z_steps;
@@ -137,6 +139,7 @@ Maps::perlin3D()
   info.cloud->height = 1;
   info.cloud->points.resize(info.cloud->width * info.cloud->height);
 
+  // 多个倍频、递减幅值的 Perlin octave 叠加形成具有空间相关性的地形。
   PerlinNoise noise(info.seed);
 
   std::vector<double>* v = new std::vector<double>;
@@ -160,6 +163,7 @@ Maps::perlin3D()
       }
     }
   }
+  // 用噪声分位数而非固定阈值控制占用比例，使 fill 在不同 seed 下仍稳定。
   std::sort(v->begin(), v->end());
   int    tpos = info.cloud->width * (1 - fill);
   double tmp  = v->at(tpos);

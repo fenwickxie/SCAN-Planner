@@ -7,6 +7,8 @@
 
 #include <string>
 
+// 将 RViz 单个 PoseStamped 包装为 nav_msgs/Path，并额外发布“当前位姿到目标”
+// 的 PoseArray 供显示。它不做路径搜索，不能替代 navi_mode=3 的上层规划器。
 ros::Publisher waypoints_pub;
 ros::Publisher waypoints_vis_pub;
 nav_msgs::Odometry odom;
@@ -18,6 +20,7 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
 }
 
 void publishWaypoints(const geometry_msgs::PoseStamped& goal) {
+  // Path 中只放目标点；PoseArray 才额外加入当前里程计位姿用于连线显示。
   nav_msgs::Path waypoints;
   waypoints.header.frame_id = "world";
   waypoints.header.stamp = ros::Time::now();
