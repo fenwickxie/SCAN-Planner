@@ -57,6 +57,10 @@
 More videos and interactive demonstrations are available on the
 <a href="https://wuyi2121.github.io/SCAN-Planner/" target="_blank">project page</a>.
 
+## 📖 Documentation
+
+For a beginner-friendly explanation of the ROS architecture, topics, data flow, planning algorithms, debugging, and extension points, see the [Chinese code guide](docs/SCAN_PLANNER_CODE_GUIDE_ZH.md).
+
 ## 🛠️ Installation
 
 > Tested on Ubuntu 20.04 with ROS Noetic
