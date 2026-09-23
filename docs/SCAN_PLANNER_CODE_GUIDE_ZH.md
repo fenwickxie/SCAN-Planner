@@ -135,26 +135,110 @@ roslaunch scan_planner run.launch
 
 ```text
 run.launch
-├── advanced_param.xml
+├── include advanced_param.xml
 │   └── scan_planner_node
 ├── closed_loop_controller
 ├── go2_kinematic_sim
-├── robot_state_publisher
+├── go2_robot_state_publisher
 ├── go2_gait_publisher
-└── simulator.xml
-    ├── mockamap_node
-    ├── odom_visualization
-    └── pcl_render_node
+└── include simulator.xml
+  ├── mockamap_node
+  ├── odom_visualization
+  └── pcl_render_node
 ```
+
+注意：这里的“顺序”是 launch 文件的展开和书写顺序，ROS 不保证所有进程都按这个顺序完成初始化。节点之间靠 topic、param 和等待逻辑解耦，例如 `scan_planner_node` 可以先启动，再等待里程计、地图观测和目标输入。
+
+默认闭环仿真会依次展开以下节点：
+
+| 展开顺序 | 节点名 | ROS 包 / 可执行文件 | 来源 launch | 对应源码或资源 | 作用 |
+|---|---|---|---|---|---|
+| 1 | `scan_planner_node` | `scan_planner` / `scan_planner_node` | [advanced_param.xml](../src/planner/plan_manage/launch/advanced_param.xml) | [scan_planner_node.cpp](../src/planner/plan_manage/src/scan_planner_node.cpp)、[scan_replan_fsm.cpp](../src/planner/plan_manage/src/scan_replan_fsm.cpp)、[planner_manager.cpp](../src/planner/plan_manage/src/planner_manager.cpp) | 主规划节点；内部初始化 FSM、GridMap、B 样条优化器和 A* |
+| 2 | `closed_loop_controller` | `scan_planner` / `closed_loop_controller` | [run.launch](../src/planner/plan_manage/launch/run.launch) | [closed_loop_controller.cpp](../src/planner/plan_manage/src/closed_loop_controller.cpp) | 订阅 `/planning/bspline` 和里程计，发布 `/cmd_vel` |
+| 3 | `go2_kinematic_sim` | `scan_planner` / `go2_kinematic_sim` | [run.launch](../src/planner/plan_manage/launch/run.launch) | [go2_kinematic_sim.cpp](../src/planner/plan_manage/src/go2_kinematic_sim.cpp) | 仿真中把 `/cmd_vel` 积分成 `/quad_0/body_pose` |
+| 4 | `go2_robot_state_publisher` | `robot_state_publisher` / `robot_state_publisher` | [run.launch](../src/planner/plan_manage/launch/run.launch) | [go2_description.urdf](../src/simulator/Utils/go2_description/urdf/go2_description.urdf) | 根据 URDF 和 `/joint_states` 发布机器人模型 TF |
+| 5 | `go2_gait_publisher` | `scan_planner` / `go2_gait_publisher` | [run.launch](../src/planner/plan_manage/launch/run.launch) | [go2_gait_publisher.cpp](../src/planner/plan_manage/src/go2_gait_publisher.cpp) | 生成 RViz 展示用的简化四足步态 `/joint_states` |
+| 6 | `mockamap_node` | `mockamap` / `mockamap_node` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | [mockamap.cpp](../src/simulator/mockamap/src/mockamap.cpp)、[maps.cpp](../src/simulator/mockamap/src/maps.cpp) | 默认生成随机柱状全局点云并 remap 到 `/map_generator/global_cloud` |
+| 7 | `odom_visualization` | `odom_visualization` / `odom_visualization` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | [odom_visualization.cpp](../src/simulator/Utils/odom_visualization/src/odom_visualization.cpp) | 将里程计可视化为路径、速度箭头、mesh 等 RViz Marker |
+| 8 | `pcl_render_node` | `local_sensing_node` / `pcl_render_node` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | [pointcloud_render_node.cpp](../src/simulator/local_sensing/src/pointcloud_render_node.cpp) | CPU/PCL 传感器渲染；订阅全局地图和机体里程计，发布局部点云/深度和传感器位姿 |
+
+主规划节点虽然在第 1 步启动，但它自己的内部初始化还会继续展开为：
+
+```text
+scan_planner_node
+└── SCANReplanFSM
+  ├── PlanningVisualization
+  └── SCANPlannerManager
+    ├── GridMap
+    ├── BsplineOptimizer
+    └── AStar
+```
+
+这些不是独立 ROS 进程，而是 `scan_planner_node` 进程内部的 C++ 对象；对应源码主要在 [scan_replan_fsm.cpp](../src/planner/plan_manage/src/scan_replan_fsm.cpp)、[planner_manager.cpp](../src/planner/plan_manage/src/planner_manager.cpp)、[grid_map.cpp](../src/planner/plan_env/src/grid_map.cpp)、[bspline_optimizer.cpp](../src/planner/bspline_opt/src/bspline_optimizer.cpp)、[dyn_a_star.cpp](../src/planner/path_searching/src/dyn_a_star.cpp)。
 
 条件分支：
 
-- `controller_mode:=open_loop`：启动 `open_loop_controller`，不启动闭环控制器和运动学仿真器。
-- `is_real_world:=true`：不启动地图生成、传感器渲染和运动学仿真，改接真实话题。
-- `use_pcd_map:=true`：以 `map_pub` 替代 `mockamap_node`。
-- `use_gpu:=true`：以 `opengl_render_node` 替代 `pcl_render_node`，前提是编译时启用了 GPU。
+- `controller_mode:=open_loop`：启动 `open_loop_controller`，源码见 [open_loop_controller.cpp](../src/planner/plan_manage/src/open_loop_controller.cpp)；不启动 `closed_loop_controller` 和 `go2_kinematic_sim`。
+- `is_real_world:=true`：不启动 `go2_kinematic_sim`、`mockamap_node`、`map_pub`、`pcl_render_node`、`opengl_render_node`；主节点改接 `/LIO/odom_vehicle`、`/LIO/odom_imu`、`/LIO/clouds_lidar` 或真实深度图。
+- `use_pcd_map:=true`：以 `map_pub` 替代 `mockamap_node`，源码见 [map_publisher.cpp](../src/simulator/map_generator/src/map_publisher.cpp)。
+- `use_gpu:=true`：以 `opengl_render_node` 替代 `pcl_render_node`，源码见 [opengl_render_node.cpp](../src/simulator/local_sensing/src/opengl_render_node.cpp)，前提是编译时启用了 GPU。
 
-### 4.3 仿真与真机话题切换
+### 4.3 实机模式的启动树
+
+实机运行通常使用：
+
+```bash
+roslaunch scan_planner run.launch is_real_world:=true sensor_type:=lidar controller_mode:=closed_loop
+```
+
+此时 [run.launch](../src/planner/plan_manage/launch/run.launch) 仍然会 include [advanced_param.xml](../src/planner/plan_manage/launch/advanced_param.xml) 和 [simulator.xml](../src/planner/plan_manage/launch/simulator.xml)，但 `simulator.xml` 内部大部分仿真节点因为 `is_real_world=true` 的条件不会启动。
+
+实机闭环模式的 launch 展开结构为：
+
+```text
+run.launch is_real_world:=true
+├── include advanced_param.xml
+│   └── scan_planner_node
+├── closed_loop_controller
+├── go2_robot_state_publisher
+├── go2_gait_publisher
+└── include simulator.xml
+  └── odom_visualization
+```
+
+实机模式会展开以下本仓库节点：
+
+| 展开顺序 | 节点名 | ROS 包 / 可执行文件 | 来源 launch | 对应源码或资源 | 作用 |
+|---|---|---|---|---|---|
+| 1 | `scan_planner_node` | `scan_planner` / `scan_planner_node` | [advanced_param.xml](../src/planner/plan_manage/launch/advanced_param.xml) | [scan_planner_node.cpp](../src/planner/plan_manage/src/scan_planner_node.cpp)、[scan_replan_fsm.cpp](../src/planner/plan_manage/src/scan_replan_fsm.cpp)、[planner_manager.cpp](../src/planner/plan_manage/src/planner_manager.cpp) | 主规划节点；读取真机里程计、传感器姿态和点云/深度图，发布 B 样条轨迹 |
+| 2 | `closed_loop_controller` | `scan_planner` / `closed_loop_controller` | [run.launch](../src/planner/plan_manage/launch/run.launch) | [closed_loop_controller.cpp](../src/planner/plan_manage/src/closed_loop_controller.cpp) | 订阅 `/planning/bspline` 和真机里程计，输出 `/cmd_vel` |
+| 3 | `go2_robot_state_publisher` | `robot_state_publisher` / `robot_state_publisher` | [run.launch](../src/planner/plan_manage/launch/run.launch) | [go2_description.urdf](../src/simulator/Utils/go2_description/urdf/go2_description.urdf) | 用 URDF 发布机器人模型 TF，供 RViz 显示 |
+| 4 | `go2_gait_publisher` | `scan_planner` / `go2_gait_publisher` | [run.launch](../src/planner/plan_manage/launch/run.launch) | [go2_gait_publisher.cpp](../src/planner/plan_manage/src/go2_gait_publisher.cpp) | 根据真机里程计生成 RViz 展示用 `/joint_states`，不控制真实腿部 |
+| 5 | `odom_visualization` | `odom_visualization` / `odom_visualization` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | [odom_visualization.cpp](../src/simulator/Utils/odom_visualization/src/odom_visualization.cpp) | 将真机里程计可视化为路径、速度箭头、mesh 等 RViz Marker |
+
+实机模式不会启动这些仿真节点：
+
+| 不启动的节点 | 来源 launch | 原因 |
+|---|---|---|
+| `go2_kinematic_sim` | [run.launch](../src/planner/plan_manage/launch/run.launch) | `unless="$(arg is_real_world)"`，真机时机器人状态来自真实定位 |
+| `mockamap_node` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | `if="not is_real_world"`，真机不生成随机仿真地图 |
+| `map_pub` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | `if="not is_real_world and use_pcd_map"`，真机不发布 PCD 仿真地图 |
+| `pcl_render_node` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | `if="not is_real_world and not use_gpu"`，真机不模拟传感器点云 |
+| `opengl_render_node` | [simulator.xml](../src/planner/plan_manage/launch/simulator.xml) | `if="not is_real_world and use_gpu"`，真机不使用 GPU 仿真渲染器 |
+
+实机模式依赖的外部节点不在本仓库内，通常需要你另外启动：
+
+| 外部模块 | 默认话题 | 本项目如何接入 |
+|---|---|---|
+| 定位/LIO | `/LIO/odom_vehicle` | [run.launch](../src/planner/plan_manage/launch/run.launch) 将 `body_pose_topic` 设为它，FSM 和控制器都读取这个里程计 |
+| 传感器位姿 | `/LIO/odom_imu` | remap 到 `/grid_map/sensor_pose`，GridMap 用它作为射线原点和姿态 |
+| LiDAR 点云 | `/LIO/clouds_lidar` | remap 到 `/grid_map/cloud`，仅 `sensor_type:=lidar` 时使用 |
+| 深度图 | `/camera/aligned_depth_to_color/image_raw` | remap 到 `/grid_map/depth`，仅 `sensor_type:=depth` 时使用 |
+| 底盘/SDK 适配 | 通常订阅 `/cmd_vel` 或桥接后命令话题 | 本项目只发布 `geometry_msgs/Twist`，真实机器人如何执行需由外部适配层完成 |
+
+也就是说，实机模式下本仓库负责“建图、规划、轨迹跟踪和 `/cmd_vel` 输出”，真实定位、真实传感器驱动和真实底盘执行链需要在仓库外先准备好。
+
+### 4.4 仿真与真机话题切换
 
 | 逻辑数据 | 仿真话题 | 真机默认话题 |
 |---|---|---|
@@ -288,14 +372,35 @@ sequenceDiagram
 
 真机模式删除仿真链，数据流变为：
 
-```text
-LIO 里程计/点云 或 深度相机
-       ↓
-GridMap + SCANReplanFSM
-       ↓ /planning/bspline
-closed_loop_controller
-       ↓ /cmd_vel
-真实机器人底层运动控制
+```mermaid
+sequenceDiagram
+  participant L as LIO/定位系统
+  participant R as 真实传感器
+  participant G as GridMap
+  participant F as SCANReplanFSM
+  participant P as PlannerManager
+  participant C as closed_loop_controller
+  participant B as 底层运动控制
+  participant Q as 真实机器人
+
+  L->>F: /LIO/odom_vehicle 或 body_pose_topic
+  L->>G: /grid_map/body_pose remap 后的机体位姿
+  L->>G: /LIO/odom_imu 或 sensor_pose_topic
+  alt LiDAR 输入
+    R->>G: /LIO/clouds_lidar 或 cloud_topic
+  else Depth 输入
+    R->>G: /camera/aligned_depth_to_color/image_raw 或 depth_topic
+  end
+  G->>G: 射线融合、概率更新、障碍膨胀
+  F->>P: 当前状态 + 局部目标
+  P->>G: 碰撞查询
+  P-->>F: UniformBspline
+  F->>C: /planning/bspline
+  L->>C: body_pose_topic 当前里程计
+  C->>B: /cmd_vel
+  B->>Q: SDK/底盘控制命令
+  Q-->>L: 真实运动后的新定位与传感器数据
+  L-->>F: 新里程计，闭环继续
 ```
 
 项目只输出 `geometry_msgs/Twist`。把它接入真机前，必须核实底层是否接受同名话题、速度所属坐标系、单位、限幅、急停和通信超时；launch 中没有展示 Unitree SDK 到底盘的适配层。
@@ -907,3 +1012,417 @@ rosparam get /scan_planner_node
 - `closed_loop_controller`：把轨迹与实际里程计误差转换为速度指令。
 
 理解这七个角色及其数据边界后，项目的主体就不再是大量分散的 C++ 文件，而是一条清晰的“感知建图 → 参考推进 → 局部优化 → 安全监控 → 闭环执行”流水线。
+
+## 18. 迁移到两轮差速机器人
+
+本项目原本在四足狗型机器人上测试。四足机器人可以通过步态近似实现一定侧向移动，而两轮差速机器人只有两个可控自由度：前进速度和偏航角速度。若机器人结构为“两后轮驱动、两个前轮随动”，它的底盘运动学仍应按差速模型处理：
+
+$$
+\dot{x}=v\cos\theta,
+\dot{y}=v\sin\theta,
+\dot{\theta}=\omega
+$$
+
+对应 ROS `geometry_msgs/Twist`：
+
+```text
+cmd.linear.x  = v
+cmd.linear.y  = 0
+cmd.angular.z = omega
+```
+
+因此迁移重点不是先大改 B 样条规划器，而是先解决“控制器和车体约束不匹配”的问题。
+
+### 18.1 原实现为什么不适合差速底盘
+
+当前闭环控制器 [closed_loop_controller.cpp](../src/planner/plan_manage/src/closed_loop_controller.cpp) 的核心思想是：
+
+```text
+世界系速度指令 = 样条速度前馈 + 位置误差比例反馈
+再将世界系二维速度旋转到机器人机体系
+最终发布 vx、vy、wz
+```
+
+对应源码中的关键输出是：
+
+```cpp
+cmd.linear.x = clamp(c * vel_world(0) + s * vel_world(1), -max_vx, max_vx);
+cmd.linear.y = clamp(-s * vel_world(0) + c * vel_world(1), -max_vy, max_vy);
+cmd.angular.z = vyaw_cmd;
+```
+
+这说明原控制器允许 `linear.y` 非零，也就是允许机器人横向修正轨迹误差。四足机器人或全向底盘可以近似执行这种指令；两轮差速底盘不能执行。若直接把该控制器接到差速底盘，会出现几个问题：
+
+1. 底盘忽略 `linear.y` 后，横向误差无法按控制器预期消除。
+2. 急弯处控制器可能认为可以侧向贴回轨迹，但真实机器人只能转向再前进，容易切角。
+3. B 样条轨迹只约束速度、加速度和障碍距离，没有显式约束曲率和最小转弯半径。
+4. 原默认速度、规划视野和碰撞模型按四足 Go2 调过，对小型两轮底盘通常偏快或外形不准。
+
+把 `closed_loop_controller/max_vy` 设为 `0` 可以临时测试，但这只是把侧向速度砍掉，并没有把横向误差正确转换为角速度，所以不建议作为正式方案。
+
+### 18.2 推荐迁移路线
+
+推荐分三阶段迁移：
+
+```text
+阶段 1：保留建图和规划器，新增差速控制器
+阶段 2：按两轮底盘重新设置速度、外形、安全距离和重规划参数
+阶段 3：若仍切角或急弯失败，再增加曲率限速或曲率约束
+```
+
+这样风险最低：先复用成熟的感知建图和局部避障，只替换最不匹配的执行层。
+
+### 18.3 新增差速控制器
+
+建议新增文件：
+
+```text
+src/planner/plan_manage/src/diff_drive_controller.cpp
+```
+
+它仍然订阅 `/planning/bspline` 和 `body_pose_topic`，也仍然发布 `/planning/go2_execution_frozen`，但输出的 `/cmd_vel` 必须满足：
+
+```text
+linear.y = 0
+```
+
+推荐采用 Pure Pursuit 风格的控制器。控制流程如下：
+
+```text
+1. 从 B 样条当前执行时间开始，沿轨迹寻找一个前视点
+2. 将前视点变换到机器人坐标系
+3. 根据前视点横向偏差计算曲率
+4. 根据曲率和速度上限计算 v、omega
+5. 航向误差过大时原地转向，并冻结轨迹时间
+6. 发布 cmd.linear.x 和 cmd.angular.z，强制 cmd.linear.y=0
+```
+
+设当前机器人世界系位姿为 $(x,y,\theta)$，前视点为 $(x_l,y_l)$。前视点在机器人坐标系下为：
+
+$$
+x_r=\cos\theta(x_l-x)+\sin\theta(y_l-y)
+$$
+
+$$
+y_r=-\sin\theta(x_l-x)+\cos\theta(y_l-y)
+$$
+
+前视距离：
+
+$$
+L_d=\sqrt{x_r^2+y_r^2}
+$$
+
+Pure Pursuit 曲率：
+
+$$
+\kappa=\frac{2y_r}{L_d^2}
+$$
+
+角速度：
+
+$$
+\omega=v\kappa
+$$
+
+完整伪代码：
+
+```cpp
+if (!receive_traj || !have_odom) {
+  publishStop();
+  return;
+}
+
+double v_ref = traj[1].evaluateDeBoorT(exec_time).head<2>().norm();
+double lookahead_dist = clamp(lookahead_min + lookahead_gain * v_ref,
+                              lookahead_min,
+                              lookahead_max);
+
+double lookahead_t = searchForwardByArcLength(exec_time, lookahead_dist);
+Eigen::Vector3d lookahead_pt = traj[0].evaluateDeBoorT(lookahead_t);
+
+double dx = lookahead_pt.x() - odom_pos.x();
+double dy = lookahead_pt.y() - odom_pos.y();
+double c = std::cos(odom_yaw);
+double s = std::sin(odom_yaw);
+
+double x_r = c * dx + s * dy;
+double y_r = -s * dx + c * dy;
+double alpha = std::atan2(y_r, x_r);
+
+geometry_msgs::Twist cmd;
+
+if (std::abs(alpha) > heading_error_threshold || x_r < 0.0) {
+  publishExecutionFrozen(true);
+  cmd.linear.x = 0.0;
+  cmd.linear.y = 0.0;
+  cmd.angular.z = clamp(k_yaw * alpha, -max_w, max_w);
+} else {
+  publishExecutionFrozen(false);
+
+  double ld2 = std::max(x_r * x_r + y_r * y_r, 1e-4);
+  double curvature = 2.0 * y_r / ld2;
+  double v_curve_limit = std::sqrt(max_lat_acc / std::max(std::abs(curvature), 1e-4));
+
+  double v = clamp(v_ref + k_v * x_r, min_v, max_v);
+  v = std::min(v, v_curve_limit);
+
+  cmd.linear.x = v;
+  cmd.linear.y = 0.0;
+  cmd.angular.z = clamp(curvature * v + k_yaw * alpha, -max_w, max_w);
+
+  exec_time = std::min(traj_duration, exec_time + dt);
+}
+
+cmd_vel_pub.publish(cmd);
+```
+
+其中 `searchForwardByArcLength()` 可以从 `exec_time` 开始按 0.02 到 0.05 s 采样 B 样条，累计相邻点距离，直到达到 `lookahead_dist`。低速机器人可用 0.03 s 作为初值，计算量很小。
+
+### 18.4 保留轨迹冻结机制
+
+差速底盘经常需要先原地转向，再前进。如果轨迹时间继续推进，机器人还没走，期望点却已经沿样条跑远，恢复前进时误差会突然变大。因此差速控制器应继续发布：
+
+```text
+/planning/go2_execution_frozen = true
+```
+
+建议触发条件：
+
+```text
+abs(alpha) > heading_error_threshold
+或前视点在车体后方 x_r < 0
+```
+
+这与现有 FSM 的 `updateLocalTrajTimeFreeze()` 兼容，不需要改状态机。
+
+### 18.5 launch 与 CMake 接入
+
+在 [run.launch](../src/planner/plan_manage/launch/run.launch) 中增加控制模式：
+
+```xml
+<!-- diff_drive: non-holonomic differential-drive tracking -->
+<node if="$(eval arg('controller_mode') == 'diff_drive')"
+      pkg="scan_planner"
+      name="diff_drive_controller"
+      type="diff_drive_controller"
+      output="screen"/>
+```
+
+建议将默认值先改为 `diff_drive`，或运行时显式传入：
+
+```bash
+roslaunch scan_planner run.launch controller_mode:=diff_drive
+```
+
+在 [CMakeLists.txt](../src/planner/plan_manage/CMakeLists.txt) 中添加可执行文件，形式与 `closed_loop_controller` 类似：
+
+```cmake
+add_executable(diff_drive_controller src/diff_drive_controller.cpp)
+target_link_libraries(diff_drive_controller ${catkin_LIBRARIES})
+add_dependencies(diff_drive_controller ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+```
+
+如果仍需仿真差速底盘，建议新增 `diff_drive_kinematic_sim.cpp`，不要复用 [go2_kinematic_sim.cpp](../src/planner/plan_manage/src/go2_kinematic_sim.cpp) 的侧向速度模型。差速仿真积分为：
+
+$$
+x_{k+1}=x_k+v\cos\theta\Delta t
+$$
+
+$$
+y_{k+1}=y_k+v\sin\theta\Delta t
+$$
+
+$$
+	heta_{k+1}=\theta_k+\omega\Delta t
+$$
+
+并强制忽略或清零 `cmd.linear.y`。
+
+### 18.6 差速控制器参数建议
+
+建议在 [advanced_param.xml](../src/planner/plan_manage/launch/advanced_param.xml) 增加：
+
+```xml
+<param name="diff_drive_controller/lookahead_min" value="0.4" type="double"/>
+<param name="diff_drive_controller/lookahead_max" value="1.0" type="double"/>
+<param name="diff_drive_controller/lookahead_gain" value="0.8" type="double"/>
+
+<param name="diff_drive_controller/k_yaw" value="1.8" type="double"/>
+<param name="diff_drive_controller/k_v" value="0.6" type="double"/>
+
+<param name="diff_drive_controller/max_v" value="0.4" type="double"/>
+<param name="diff_drive_controller/min_v" value="0.0" type="double"/>
+<param name="diff_drive_controller/max_w" value="0.8" type="double"/>
+<param name="diff_drive_controller/max_lat_acc" value="0.35" type="double"/>
+
+<param name="diff_drive_controller/heading_error_threshold" value="0.45" type="double"/>
+<param name="diff_drive_controller/finish_dist" value="0.15" type="double"/>
+```
+
+各参数含义和调参方向：
+
+| 参数 | 初值 | 增大效果 | 减小效果 | 调参建议 |
+|---|---:|---|---|---|
+| `lookahead_min` | 0.4 m | 跟踪更平滑，但急弯更容易切角 | 急弯更贴合，但可能左右摆动 | 直线抖动时增大，急弯内切时减小 |
+| `lookahead_max` | 1.0 m | 高速更稳定，提前转向 | 响应更灵敏 | 低速室内先设 0.8 到 1.0 m |
+| `lookahead_gain` | 0.8 | 速度越高看得越远 | 高速仍看得近 | 随 `max_v` 提升而增大 |
+| `k_yaw` | 1.8 | 转向更快 | 转向更慢 | 摆动则减小，转不过来则增大 |
+| `k_v` | 0.6 | 纵向误差收敛更快 | 前进更温和 | 轮子打滑或追踪冲过头时减小 |
+| `max_v` | 0.4 m/s | 任务更快，但制动和转弯压力更大 | 更稳但慢 | 初期不要超过 0.4 m/s |
+| `max_w` | 0.8 rad/s | 原地转向更快 | 急弯更慢 | 以底盘不打滑为准 |
+| `max_lat_acc` | 0.35 m/s² | 曲率限速更宽松 | 急弯更慢更稳 | 低附着地面应减小 |
+| `heading_error_threshold` | 0.45 rad | 更少原地转向，运动更连续 | 更常先转向再走 | 差速车建议 0.35 到 0.6 rad |
+| `finish_dist` | 0.15 m | 更早结束 | 终点更准但可能抖动 | 与定位噪声同量级 |
+
+### 18.7 规划参数建议
+
+两轮差速底盘不能横向躲避，建议先把整体规划调得保守一些。
+
+建议初始配置：
+
+```xml
+<arg name="max_vel" default="0.4"/>
+<arg name="max_acc" default="0.3"/>
+<arg name="planning_horizon" default="2.8"/>
+
+<param name="fsm/thresh_replan" value="0.6" type="double"/>
+<param name="fsm/thresh_no_replan" value="0.15" type="double"/>
+<param name="fsm/emergency_time_" value="1.2" type="double"/>
+
+<param name="manager/control_points_distance" value="0.15" type="double"/>
+<param name="manager/feasibility_tolerance" value="0.3" type="double"/>
+
+<param name="optimization/lambda_smooth" value="1.5" type="double"/>
+<param name="optimization/lambda_collision" value="1.2" type="double"/>
+<param name="optimization/lambda_feasibility" value="0.2" type="double"/>
+<param name="optimization/dist0" value="0.25" type="double"/>
+```
+
+为什么这样设置：
+
+- `max_vel` 和 `max_acc` 降低：减少切角、打滑和急停距离。
+- `planning_horizon` 降低：低速室内差速车不需要太远局部目标，局部优化更稳定。
+- `thresh_replan` 降低：更频繁用真实里程计刷新规划起点，减小跟踪误差积累。
+- `control_points_distance` 降低：轨迹更容易表达平滑绕障，但计算量会增加。
+- `dist0` 增大：给差速跟踪误差留下额外净空。
+- `lambda_smooth` 增大：让轨迹少出现急折线，差速底盘更容易跟。
+- `lambda_feasibility` 增大：减少规划器生成动态上偏激的轨迹。
+
+### 18.8 碰撞模型重新标定
+
+两轮差速机器人一般是矩形底盘或近似圆形底盘，需要重新设置 GridMap 的双圆柱模型。
+
+如果底盘长为 $L$，宽为 $W$，建议：
+
+```text
+double_cylinder_radius = W / 2 + 安全裕量
+double_cylinder_offset = max(0, L / 2 - double_cylinder_radius)
+```
+
+例如底盘长 0.60 m、宽 0.42 m，安全裕量取 0.04 m：
+
+```text
+radius = 0.42 / 2 + 0.04 = 0.25
+offset = 0.60 / 2 - 0.25 = 0.05
+```
+
+可先设得稍保守：
+
+```xml
+<param name="grid_map/double_cylinder_radius" value="0.25"/>
+<param name="grid_map/double_cylinder_offset" value="0.08"/>
+<param name="grid_map/obstacles_inflation_z_up" value="0.05"/>
+<param name="grid_map/obstacles_inflation_z_down" value="0.05"/>
+<param name="grid_map/body_height" value="0.25"/>
+```
+
+如果底盘近似圆形，则可令：
+
+```xml
+<param name="grid_map/double_cylinder_offset" value="0.0"/>
+<param name="grid_map/double_cylinder_radius" value="机器人半径 + 安全裕量"/>
+```
+
+### 18.9 曲率限速与进一步优化
+
+如果替换差速控制器后仍出现“轨迹安全但底盘切角撞障”，优先在控制器里做曲率限速，而不是马上改优化器。
+
+B 样条轨迹曲率可由速度和加速度估计：
+
+$$
+\kappa=\frac{x'y''-y'x''}{(x'^2+y'^2)^{3/2}}
+$$
+
+差速底盘角速度满足：
+
+$$
+\omega=v\kappa
+$$
+
+因此速度应满足：
+
+$$
+v \le \frac{\omega_{max}}{|\kappa|}
+$$
+
+同时横向加速度近似满足：
+
+$$
+a_y=v^2|\kappa|
+$$
+
+因此也应满足：
+
+$$
+v \le \sqrt{\frac{a_{lat,max}}{|\kappa|}}
+$$
+
+这就是 `max_lat_acc` 的作用。只有当曲率限速仍无法解决问题时，再考虑在 [bspline_optimizer.cpp](../src/planner/bspline_opt/src/bspline_optimizer.cpp) 中新增曲率代价：
+
+```text
+J_curvature = sum max(0, abs(kappa_i) - kappa_max)^2
+```
+
+但曲率代价依赖一阶和二阶导数，梯度推导和数值稳定性更复杂，不建议作为第一步改造。
+
+### 18.10 验证顺序
+
+建议按下面顺序验证，不要直接上复杂避障场景：
+
+1. **方向验证**：不启用复杂规划，只确认 `/cmd_vel` 方向。`linear.x>0` 应前进，`angular.z>0` 应逆时针转。
+2. **直线跟踪**：空旷环境跟踪直线。若左右摆动，增大 `lookahead_min` 或减小 `k_yaw`。
+3. **大圆弧跟踪**：验证连续转弯。若内切严重，减小速度、减小 lookahead 或增大 `dist0`。
+4. **静态障碍绕行**：若轨迹安全但车体撞障，说明控制误差或非完整约束导致，应增大 footprint/`dist0` 或加强曲率限速。
+5. **窄通道**：先确认通道宽度大于机器人 footprint 加跟踪误差，不要通过降低 `p_occ` 强行通过真实障碍。
+
+### 18.11 最终建议
+
+迁移到两轮差速机器人时，推荐保留以下模块：
+
+```text
+GridMap 建图
+SCANReplanFSM 状态机
+SCANPlannerManager 局部规划
+BsplineOptimizer 避障优化
+```
+
+优先替换以下模块：
+
+```text
+closed_loop_controller -> diff_drive_controller
+go2_kinematic_sim -> diff_drive_kinematic_sim（仿真时）
+```
+
+同时重新设置：
+
+```text
+机器人 footprint
+max_vel / max_acc
+planning_horizon
+thresh_replan
+dist0
+控制器 lookahead / max_w / max_lat_acc
+```
+
+最关键的一句话：原控制器将横向误差转成 `linear.y`，这对四足机器人合理，但对两轮差速机器人不成立。两轮差速机器人必须把横向误差转成角速度，再通过前进速度逐步消除误差。
