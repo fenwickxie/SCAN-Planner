@@ -31,7 +31,7 @@ add_message_files(
   Bspline.msg
   DataDisp.msg
   )
-  
+
 # Generate added messages and services with any dependencies listed here
 generate_messages(
   DEPENDENCIES
@@ -57,11 +57,11 @@ include_directories(
 
 
 add_executable(scan_planner_node
-  src/scan_planner_node.cpp 
+  src/scan_planner_node.cpp
   src/scan_replan_fsm.cpp
   src/planner_manager.cpp
   )
-target_link_libraries(scan_planner_node 
+target_link_libraries(scan_planner_node
   ${catkin_LIBRARIES}
   )
 add_dependencies(scan_planner_node ${${PROJECT_NAME}_EXPORTED_TARGETS})
@@ -74,8 +74,15 @@ add_executable(closed_loop_controller src/closed_loop_controller.cpp)
 target_link_libraries(closed_loop_controller ${catkin_LIBRARIES})
 add_dependencies(closed_loop_controller ${${PROJECT_NAME}_EXPORTED_TARGETS})
 
+add_executable(diff_drive_controller src/diff_drive_controller.cpp)
+target_link_libraries(diff_drive_controller ${catkin_LIBRARIES})
+add_dependencies(diff_drive_controller ${${PROJECT_NAME}_EXPORTED_TARGETS})
+
 add_executable(go2_kinematic_sim src/go2_kinematic_sim.cpp)
 target_link_libraries(go2_kinematic_sim ${catkin_LIBRARIES})
+
+add_executable(diff_drive_kinematic_sim src/diff_drive_kinematic_sim.cpp)
+target_link_libraries(diff_drive_kinematic_sim ${catkin_LIBRARIES})
 
 add_executable(go2_gait_publisher src/go2_gait_publisher.cpp)
 target_link_libraries(go2_gait_publisher ${catkin_LIBRARIES})

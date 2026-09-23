@@ -179,9 +179,26 @@ scan_planner_node
 条件分支：
 
 - `controller_mode:=open_loop`：启动 `open_loop_controller`，源码见 [open_loop_controller.cpp](../src/planner/plan_manage/src/open_loop_controller.cpp)；不启动 `closed_loop_controller` 和 `go2_kinematic_sim`。
+- `controller_mode:=diff_drive`：启动 `diff_drive_controller`，源码见 [diff_drive_controller.cpp](../src/planner/plan_manage/src/diff_drive_controller.cpp)；仿真时同时启动 `diff_drive_kinematic_sim`，源码见 [diff_drive_kinematic_sim.cpp](../src/planner/plan_manage/src/diff_drive_kinematic_sim.cpp)。
 - `is_real_world:=true`：不启动 `go2_kinematic_sim`、`mockamap_node`、`map_pub`、`pcl_render_node`、`opengl_render_node`；主节点改接 `/LIO/odom_vehicle`、`/LIO/odom_imu`、`/LIO/clouds_lidar` 或真实深度图。
 - `use_pcd_map:=true`：以 `map_pub` 替代 `mockamap_node`，源码见 [map_publisher.cpp](../src/simulator/map_generator/src/map_publisher.cpp)。
 - `use_gpu:=true`：以 `opengl_render_node` 替代 `pcl_render_node`，源码见 [opengl_render_node.cpp](../src/simulator/local_sensing/src/opengl_render_node.cpp)，前提是编译时启用了 GPU。
+
+控制器可通过 `controller_mode` 自由切换：
+
+| 模式 | 启动控制器 | 仿真反馈节点 | 适用场景 |
+|---|---|---|---|
+| `closed_loop` | [closed_loop_controller.cpp](../src/planner/plan_manage/src/closed_loop_controller.cpp) | [go2_kinematic_sim.cpp](../src/planner/plan_manage/src/go2_kinematic_sim.cpp) | 四足/可侧向修正平台，输出 `vx/vy/wz` |
+| `diff_drive` | [diff_drive_controller.cpp](../src/planner/plan_manage/src/diff_drive_controller.cpp) | [diff_drive_kinematic_sim.cpp](../src/planner/plan_manage/src/diff_drive_kinematic_sim.cpp) | 两轮差速底盘，输出 `v/w` 且强制 `linear.y=0` |
+| `open_loop` | [open_loop_controller.cpp](../src/planner/plan_manage/src/open_loop_controller.cpp) | 无需控制反馈节点 | 直接发布理想里程计，用于几何轨迹展示 |
+
+示例：
+
+```bash
+roslaunch scan_planner run.launch controller_mode:=diff_drive
+roslaunch scan_planner run.launch controller_mode:=closed_loop
+roslaunch scan_planner run.launch controller_mode:=open_loop
+```
 
 ### 4.3 实机模式的启动树
 
@@ -1072,9 +1089,9 @@ cmd.angular.z = vyaw_cmd;
 
 这样风险最低：先复用成熟的感知建图和局部避障，只替换最不匹配的执行层。
 
-### 18.3 新增差速控制器
+### 18.3 已实现差速控制器
 
-建议新增文件：
+本仓库已新增差速控制器文件：
 
 ```text
 src/planner/plan_manage/src/diff_drive_controller.cpp
@@ -1125,7 +1142,7 @@ $$
 \omega=v\kappa
 $$
 
-完整伪代码：
+核心实现逻辑：
 
 ```cpp
 if (!receive_traj || !have_odom) {
@@ -1198,32 +1215,33 @@ abs(alpha) > heading_error_threshold
 
 ### 18.5 launch 与 CMake 接入
 
-在 [run.launch](../src/planner/plan_manage/launch/run.launch) 中增加控制模式：
+当前 [run.launch](../src/planner/plan_manage/launch/run.launch) 已支持 `diff_drive` 控制模式：
 
 ```xml
-<!-- diff_drive: non-holonomic differential-drive tracking -->
-<node if="$(eval arg('controller_mode') == 'diff_drive')"
-      pkg="scan_planner"
-      name="diff_drive_controller"
-      type="diff_drive_controller"
-      output="screen"/>
+<group if="$(eval arg('controller_mode') == 'diff_drive')">
+  <node pkg="scan_planner" name="diff_drive_controller" type="diff_drive_controller" output="screen"/>
+  <node unless="$(arg is_real_world)" pkg="scan_planner" name="diff_drive_kinematic_sim" type="diff_drive_kinematic_sim" output="screen"/>
+</group>
 ```
 
-建议将默认值先改为 `diff_drive`，或运行时显式传入：
+运行时显式传入即可自由切换：
 
 ```bash
 roslaunch scan_planner run.launch controller_mode:=diff_drive
 ```
 
-在 [CMakeLists.txt](../src/planner/plan_manage/CMakeLists.txt) 中添加可执行文件，形式与 `closed_loop_controller` 类似：
+当前 [CMakeLists.txt](../src/planner/plan_manage/CMakeLists.txt) 已添加两个可执行目标：
 
 ```cmake
 add_executable(diff_drive_controller src/diff_drive_controller.cpp)
 target_link_libraries(diff_drive_controller ${catkin_LIBRARIES})
-add_dependencies(diff_drive_controller ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(diff_drive_controller ${${PROJECT_NAME}_EXPORTED_TARGETS})
+
+add_executable(diff_drive_kinematic_sim src/diff_drive_kinematic_sim.cpp)
+target_link_libraries(diff_drive_kinematic_sim ${catkin_LIBRARIES})
 ```
 
-如果仍需仿真差速底盘，建议新增 `diff_drive_kinematic_sim.cpp`，不要复用 [go2_kinematic_sim.cpp](../src/planner/plan_manage/src/go2_kinematic_sim.cpp) 的侧向速度模型。差速仿真积分为：
+仿真差速底盘时使用 [diff_drive_kinematic_sim.cpp](../src/planner/plan_manage/src/diff_drive_kinematic_sim.cpp)，不要复用 [go2_kinematic_sim.cpp](../src/planner/plan_manage/src/go2_kinematic_sim.cpp) 的侧向速度模型。差速仿真积分为：
 
 $$
 x_{k+1}=x_k+v\cos\theta\Delta t

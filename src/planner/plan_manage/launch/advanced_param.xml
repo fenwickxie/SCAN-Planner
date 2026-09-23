@@ -33,7 +33,7 @@
     <param name="fsm/thresh_no_replan" value="0.1" type="double"/>
     <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
     <param name="fsm/emergency_time_" value="1.0" type="double"/>
-    <param name="fsm/fail_safe" value="true" type="bool"/> 
+    <param name="fsm/fail_safe" value="true" type="bool"/>
     <param name="fsm/max_replan_fail_count" value="1000" type="int"/>
     <param name="fsm/is_real_world" value="$(arg is_real_world)" type="bool"/>
 
@@ -101,5 +101,19 @@
   <param name="closed_loop_controller/max_vy" value="0.35" type="double"/>
   <param name="closed_loop_controller/max_vyaw" value="1.0" type="double"/>
   <param name="closed_loop_controller/finish_dist" value="0.15" type="double"/>
+
+  <!-- differential-drive trajectory tracking -->
+  <param name="diff_drive_controller/lookahead_min" value="0.4" type="double"/>
+  <param name="diff_drive_controller/lookahead_max" value="1.0" type="double"/>
+  <param name="diff_drive_controller/lookahead_gain" value="0.8" type="double"/>
+  <param name="diff_drive_controller/k_yaw" value="1.8" type="double"/>
+  <param name="diff_drive_controller/k_v" value="0.6" type="double"/>
+  <param name="diff_drive_controller/max_v" value="0.4" type="double"/>
+  <param name="diff_drive_controller/min_v" value="0.0" type="double"/>
+  <param name="diff_drive_controller/max_w" value="0.8" type="double"/>
+  <param name="diff_drive_controller/max_lat_acc" value="0.35" type="double"/>
+  <param name="diff_drive_controller/heading_error_threshold" value="0.45" type="double"/>
+  <param name="diff_drive_controller/finish_dist" value="0.15" type="double"/>
+  <param name="diff_drive_controller/search_dt" value="0.03" type="double"/>
 
 </launch>
